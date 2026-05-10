@@ -432,7 +432,7 @@ function formatInstallment(data) {
 
   const totalAddr = homes.length + works.length;
 
-  let msg = `[${safe(p.nationid)}] MEGABOT🤖\n`;
+  let msg = `[${safe(p.nationid)}]\n`;
   msg += `┌● Name: ${safe(p.fullname)}\n`;
   msg += `├● ID: ${safe(p.nationid)}\n`;
   msg += `├● วันเกิด: ${formatThaiBirth(p.birth)}\n`;
@@ -1458,7 +1458,7 @@ async function searchIMEI(imei) {
     });
     const data = response.data;
     if (!data || !data.result || !data.result.imei) {
-      return `📳MEGABOT
+      return `📳NANABOT
 📱 ข้อมูลอุปกรณ์ (Device Info)
 
 ⛔ไม่พบข้อมูลรายการ หรือ ตัวเลขไม่ถูกต้อง
@@ -1473,7 +1473,7 @@ async function searchIMEI(imei) {
       dateStr = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')} ${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')} (UTC+02:00)`;
     }
 
-    return `📳MEGABOT
+    return `📳NANABOT
 📱 ข้อมูลอุปกรณ์ (Device Info)
 📅 วันที่บันทึกข้อมูล: ${dateStr}
 🔢 IMEI 1: ${data.result.imei || '-'}
@@ -2278,7 +2278,7 @@ function buildMenuFooter() {
 function buildMenuCarouselFlex() {
   return {
     type: 'flex',
-    altText: 'เมนูคำสั่ง MEGABOT',
+    altText: 'เมนูคำสั่ง[NANABOT]',
     contents: {
       type: 'carousel',
       contents: [
@@ -2293,7 +2293,7 @@ function buildMenuCarouselFlex() {
             contents: [
               {
                 type: 'text',
-                text: 'MEGABOT 1/4',
+                text: 'NANABOT 1/4',
                 color: '#FFFFFF',
                 weight: 'bold',
                 size: 'lg'
@@ -2342,7 +2342,7 @@ function buildMenuCarouselFlex() {
             contents: [
               {
                 type: 'text',
-                text: 'MEGABOT 2/4',
+                text: 'NANABOT 2/4',
                 color: '#FFFFFF',
                 weight: 'bold',
                 size: 'lg'
@@ -2393,7 +2393,7 @@ function buildMenuCarouselFlex() {
             contents: [
               {
                 type: 'text',
-                text: 'MEGABOT 3/4',
+                text: 'NANABOT 3/4',
                 color: '#FFFFFF',
                 weight: 'bold',
                 size: 'lg'
@@ -2460,7 +2460,7 @@ function buildMenuCarouselFlex() {
             contents: [
               {
                 type: 'text',
-                text: 'MEGABOT 4/4',
+                text: 'NANABOT 4/4',
                 color: '#FFFFFF',
                 weight: 'bold',
                 size: 'lg'
@@ -3407,7 +3407,7 @@ async function handleText(event) {
     return reply(event.replyToken, [
       {
         type: 'text',
-        text: '📋 เมนูคำสั่ง MEGABOT\nเลื่อนดูเมนูแต่ละหน้าได้เลย'
+        text: '📋 เมนูคำสั่ง NANABOT\nเลื่อนดูเมนูแต่ละหน้าได้เลย'
       },
       buildMenuCarouselFlex()
     ]);
