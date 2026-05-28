@@ -3834,113 +3834,161 @@ function canUseBotCommands(userId, member, text) {
 
 function buildWelcomeWarningFlex() {
   return {
-    type: 'flex',
-    altText: 'ข้อควรปฏิบัติและคำเตือนสำคัญ',
-    contents: {
-      type: 'bubble',
-      size: 'mega',
-      body: {
-        type: 'box',
-        layout: 'vertical',
-        backgroundColor: '#0B0F14',
-        paddingAll: '18px',
-        spacing: 'md',
-        contents: [
-          {
-            type: 'text',
-            text: '⚠️ ข้อควรปฏิบัติและคำเตือนสำคัญ ⚠️',
-            weight: 'bold',
-            size: 'lg',
-            color: '#FFCC00',
-            wrap: true,
-            align: 'center'
-          },
-          {
-            type: 'separator',
-            color: '#334155'
-          },
-          {
-            type: 'text',
-            text: '1️⃣ สิทธิ์การเข้าถึง',
-            weight: 'bold',
-            color: '#FFFFFF',
-            size: 'sm'
-          },
-          {
-            type: 'text',
-            text: 'อนุญาตเฉพาะเจ้าหน้าที่ตำรวจที่ปฏิบัติหน้าที่เท่านั้น',
-            color: '#CBD5E1',
-            size: 'sm',
-            wrap: true
-          },
-          {
-            type: 'text',
-            text: '2️⃣ วัตถุประสงค์',
-            weight: 'bold',
-            color: '#FFFFFF',
-            size: 'sm',
-            margin: 'md'
-          },
-          {
-            type: 'text',
-            text: 'ข้อมูลนี้มีไว้เพื่อสนับสนุนงานด้านการสืบสวนสอบสวนโดยเฉพาะ',
-            color: '#CBD5E1',
-            size: 'sm',
-            wrap: true
-          },
-          {
-            type: 'text',
-            text: '3️⃣ ข้อเคร่งคัด',
-            weight: 'bold',
-            color: '#FFFFFF',
-            size: 'sm',
-            margin: 'md'
-          },
-          {
-            type: 'text',
-            text: 'ห้ามคัดลอก เผยแพร่ หรือส่งต่อข้อมูลสู่ภายนอกโดยเด็ดขาด หากฝ่าฝืน ทำการตัดสิทธิ์ในทันที',
-            color: '#FCA5A5',
-            size: 'sm',
-            wrap: true
-          },
-          {
-            type: 'text',
-            text: '4️⃣ การยืนยันตัวตน',
-            weight: 'bold',
-            color: '#FFFFFF',
-            size: 'sm',
-            margin: 'md'
-          },
-          {
-            type: 'text',
-            text: 'ผู้ใช้งานต้องดำเนินการยืนยันตัวตนตามขั้นตอนที่กำหนดให้ครบถ้วนทุกครั้ง',
-            color: '#CBD5E1',
-            size: 'sm',
-            wrap: true
-          }
-        ]
-      },
-      footer: {
-        type: 'box',
-        layout: 'vertical',
-        backgroundColor: '#0B0F14',
-        paddingAll: '16px',
-        contents: [
-          {
-            type: 'button',
-            style: 'primary',
-            color: '#22C55E',
-            height: 'sm',
-            action: {
-              type: 'uri',
-              label: 'ติดต่อ ADMIN',
-              uri: 'https://line.me/ti/p/mVmD-ncfvU'
+    "type": "flex",
+  "altText": "คำเตือนการใช้งานระบบ",
+  "contents": {
+    "type": "bubble",
+    "size": "mega",
+    "body": {
+      "type": "box",
+      "layout": "vertical",
+      "backgroundColor": "#050B18",
+      "paddingAll": "22px",
+      "spacing": "lg",
+      "contents": [
+        {
+          "type": "text",
+          "text": "⚠️ คำเตือนการใช้งานระบบ ⚠️",
+          "weight": "bold",
+          "size": "xl",
+          "color": "#FACC15",
+          "align": "center",
+          "wrap": true
+        },
+        {
+          "type": "text",
+          "text": "ระบบสำหรับข้าราชการตำรวจ\nและเจ้าหน้าที่ผู้ได้รับอนุญาตเท่านั้น",
+          "size": "md",
+          "weight": "bold",
+          "color": "#FFFFFF",
+          "align": "center",
+          "wrap": true,
+          "margin": "md"
+        },
+        {
+          "type": "separator",
+          "color": "#334155",
+          "margin": "lg"
+        },
+        {
+          "type": "box",
+          "layout": "vertical",
+          "backgroundColor": "#0F172A",
+          "cornerRadius": "14px",
+          "paddingAll": "14px",
+          "margin": "lg",
+          "contents": [
+            {
+              "type": "text",
+              "text": "🔐 การเข้าถึงระบบ",
+              "weight": "bold",
+              "size": "md",
+              "color": "#F8FAFC"
+            },
+            {
+              "type": "text",
+              "text": "อนุญาตเฉพาะผู้ปฏิบัติหน้าที่ตามอำนาจหน้าที่ และได้รับสิทธิ์จากผู้ดูแลระบบเท่านั้น",
+              "size": "sm",
+              "color": "#CBD5E1",
+              "wrap": true,
+              "margin": "sm"
             }
+          ]
+        },
+        {
+          "type": "box",
+          "layout": "vertical",
+          "backgroundColor": "#0F172A",
+          "cornerRadius": "14px",
+          "paddingAll": "14px",
+          "contents": [
+            {
+              "type": "text",
+              "text": "📌 ข้อกำหนดการใช้งาน",
+              "weight": "bold",
+              "size": "md",
+              "color": "#F8FAFC"
+            },
+            {
+              "type": "text",
+              "text": "ข้อมูลภายในระบบใช้เพื่อสนับสนุนการปฏิบัติราชการ และการตรวจสอบตามภารกิจที่ได้รับมอบหมายเท่านั้น",
+              "size": "sm",
+              "color": "#CBD5E1",
+              "wrap": true,
+              "margin": "sm"
+            }
+          ]
+        },
+        {
+          "type": "box",
+          "layout": "vertical",
+          "backgroundColor": "#1E1111",
+          "cornerRadius": "14px",
+          "paddingAll": "14px",
+          "contents": [
+            {
+              "type": "text",
+              "text": "🚫 ข้อห้ามโดยเด็ดขาด",
+              "weight": "bold",
+              "size": "md",
+              "color": "#FCA5A5"
+            },
+            {
+              "type": "text",
+              "text": "ห้ามบันทึก คัดลอก เผยแพร่ ส่งต่อ หรือใช้ข้อมูลนอกเหนือภารกิจราชการโดยเด็ดขาด หากตรวจพบจะทำการระงับสิทธิ์ใช้งานทันที และดำเนินการตามระเบียบที่เกี่ยวข้อง",
+              "size": "sm",
+              "color": "#FECACA",
+              "wrap": true,
+              "margin": "sm"
+            }
+          ]
+        },
+        {
+          "type": "box",
+          "layout": "vertical",
+          "backgroundColor": "#0F172A",
+          "cornerRadius": "14px",
+          "paddingAll": "14px",
+          "contents": [
+            {
+              "type": "text",
+              "text": "🪪 การยืนยันตัวตน",
+              "weight": "bold",
+              "size": "md",
+              "color": "#F8FAFC"
+            },
+            {
+              "type": "text",
+              "text": "แจ้งข้อมูลที่ถูกต้องไม่เป็นเท็จ และ รับผิดชอบบัญชีการใช้งานของท่านแต่เพียงผู้เดียวเท่านั้น",
+              "size": "sm",
+              "color": "#CBD5E1",
+              "wrap": true,
+              "margin": "sm"
+            }
+          ]
+        }
+      ]
+    },
+    "footer": {
+      "type": "box",
+      "layout": "vertical",
+      "backgroundColor": "#050B18",
+      "paddingAll": "18px",
+      "contents": [
+        {
+          "type": "button",
+          "style": "primary",
+          "height": "sm",
+          "color": "#1D4ED8",
+          "action": {
+            "type": "message",
+            "label": "ยินยอมรับข้อตกลง",
+            "text": "ยินยอมรับข้อตกลง"
           }
-        ]
-      }
+        }
+      ]
     }
-  };
+  }
 }
 
 function buildSupportFlex() {
