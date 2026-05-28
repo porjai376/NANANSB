@@ -2001,7 +2001,7 @@ async function searchIMEI(imei) {
     });
     const data = response.data;
     if (!data || !data.result || !data.result.imei) {
-      return `📳MEGABOT
+      return `📳NANABOT
 📱 ข้อมูลอุปกรณ์ (Device Info)
 
 ⛔ไม่พบข้อมูลรายการ หรือ ตัวเลขไม่ถูกต้อง
@@ -2016,7 +2016,7 @@ async function searchIMEI(imei) {
       dateStr = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')} ${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')} (UTC+02:00)`;
     }
 
-    return `📳MEGABOT
+    return `📳NANABOT
 📱ข้อมูลอุปกรณ์ (Device Info)
 📅วันที่บันทึกข้อมูล: ${dateStr}
 🔢IMEI 1: ${data.result.imei || '-'}
@@ -4888,7 +4888,7 @@ answer = answer.replace(
 
    return reply(event.replyToken,{
       type:'text',
-      text:`🤖 MEGABOT\n-  -  -  -  -  -  -\n${res.response[0].text}`
+      text:`\n-  -  -  -  -  -  -\n${res.response[0].text}`
    });
 
 if (event.type === 'message' && event.message.type === 'image') {
