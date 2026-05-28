@@ -3723,7 +3723,7 @@ function buildContactAdminFlex() {
       action: {
         type: 'uri',
         label: '👤 ติดต่อ ADMIN',
-        uri: 'https://line.me/ti/p/mVmD-ncfvU'
+        uri: 'https://line.me/R/ti/p/@063kejcp'
             }
           }
         ]
