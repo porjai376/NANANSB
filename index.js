@@ -3834,156 +3834,154 @@ function canUseBotCommands(userId, member, text) {
 
 function buildWelcomeWarningFlex() {
   return {
-    "type": "flex",
-  "altText": "คำเตือนการใช้งานระบบ",
-  "contents": {
-    "type": "bubble",
-    "size": "mega",
-    "body": {
-      "type": "box",
-      "layout": "vertical",
-      "backgroundColor": "#050B18",
-      "paddingAll": "22px",
-      "spacing": "lg",
-      "contents": [
+  type: 'flex',
+  altText: 'คำเตือนการใช้งานระบบ',
+  contents: {
+    type: 'bubble',
+    size: 'mega',
+    body: {
+      type: 'box',
+      layout: 'vertical',
+      backgroundColor: '#050B18',
+      paddingAll: '22px',
+      spacing: 'lg',
+      contents: [
         {
-          "type": "text",
-          "text": "⚠️ คำเตือนการใช้งานระบบ ⚠️",
-          "weight": "bold",
-          "size": "xl",
-          "color": "#FACC15",
-          "align": "center",
-          "wrap": true
+          type: 'text',
+          text: '⚠️ คำเตือนการใช้งาน\nระบบ ⚠️',
+          weight: 'bold',
+          size: 'xl',
+          color: '#FACC15',
+          align: 'center',
+          wrap: true
         },
         {
-          "type": "text",
-          "text": "ระบบสำหรับข้าราชการตำรวจ\nและเจ้าหน้าที่ผู้ได้รับอนุญาตเท่านั้น",
-          "size": "md",
-          "weight": "bold",
-          "color": "#FFFFFF",
-          "align": "center",
-          "wrap": true,
-          "margin": "md"
+          type: 'text',
+          text: 'ระบบสำหรับข้าราชการตำรวจ\nและเจ้าหน้าที่ผู้ได้รับอนุญาตเท่านั้น',
+          size: 'md',
+          weight: 'bold',
+          color: '#FFFFFF',
+          align: 'center',
+          wrap: true
         },
         {
-          "type": "separator",
-          "color": "#334155",
-          "margin": "lg"
+          type: 'separator',
+          color: '#334155',
+          margin: 'lg'
         },
         {
-          "type": "box",
-          "layout": "vertical",
-          "backgroundColor": "#0F172A",
-          "cornerRadius": "14px",
-          "paddingAll": "14px",
-          "margin": "lg",
-          "contents": [
+          type: 'box',
+          layout: 'vertical',
+          backgroundColor: '#0F172A',
+          cornerRadius: '18px',
+          paddingAll: '16px',
+          contents: [
             {
-              "type": "text",
-              "text": "🔐 การเข้าถึงระบบ",
-              "weight": "bold",
-              "size": "md",
-              "color": "#F8FAFC"
+              type: 'text',
+              text: '🔐 การเข้าถึงระบบ',
+              weight: 'bold',
+              size: 'lg',
+              color: '#F8FAFC'
             },
             {
-              "type": "text",
-              "text": "อนุญาตเฉพาะผู้ปฏิบัติหน้าที่ตามอำนาจหน้าที่ และได้รับสิทธิ์จากผู้ดูแลระบบเท่านั้น",
-              "size": "sm",
-              "color": "#CBD5E1",
-              "wrap": true,
-              "margin": "sm"
+              type: 'text',
+              text: 'อนุญาตเฉพาะผู้ปฏิบัติหน้าที่ตามอำนาจหน้าที่ และได้รับสิทธิ์จากผู้ดูแลระบบเท่านั้น',
+              size: 'md',
+              color: '#CBD5E1',
+              wrap: true,
+              margin: 'sm'
             }
           ]
         },
         {
-          "type": "box",
-          "layout": "vertical",
-          "backgroundColor": "#0F172A",
-          "cornerRadius": "14px",
-          "paddingAll": "14px",
-          "contents": [
+          type: 'box',
+          layout: 'vertical',
+          backgroundColor: '#0F172A',
+          cornerRadius: '18px',
+          paddingAll: '16px',
+          contents: [
             {
-              "type": "text",
-              "text": "📌 ข้อกำหนดการใช้งาน",
-              "weight": "bold",
-              "size": "md",
-              "color": "#F8FAFC"
+              type: 'text',
+              text: '📌 ข้อกำหนดการใช้งาน',
+              weight: 'bold',
+              size: 'lg',
+              color: '#F8FAFC'
             },
             {
-              "type": "text",
-              "text": "ข้อมูลภายในระบบใช้เพื่อสนับสนุนการปฏิบัติราชการ และการตรวจสอบตามภารกิจที่ได้รับมอบหมายเท่านั้น",
-              "size": "sm",
-              "color": "#CBD5E1",
-              "wrap": true,
-              "margin": "sm"
+              type: 'text',
+              text: 'ข้อมูลภายในระบบใช้เพื่อสนับสนุนการปฏิบัติราชการ และการตรวจสอบตามภารกิจที่ได้รับมอบหมายเท่านั้น',
+              size: 'md',
+              color: '#CBD5E1',
+              wrap: true,
+              margin: 'sm'
             }
           ]
         },
         {
-          "type": "box",
-          "layout": "vertical",
-          "backgroundColor": "#1E1111",
-          "cornerRadius": "14px",
-          "paddingAll": "14px",
-          "contents": [
+          type: 'box',
+          layout: 'vertical',
+          backgroundColor: '#1E1111',
+          cornerRadius: '18px',
+          paddingAll: '16px',
+          contents: [
             {
-              "type": "text",
-              "text": "🚫 ข้อห้ามโดยเด็ดขาด",
-              "weight": "bold",
-              "size": "md",
-              "color": "#FCA5A5"
+              type: 'text',
+              text: '🚫 ข้อห้ามโดยเด็ดขาด',
+              weight: 'bold',
+              size: 'lg',
+              color: '#FCA5A5'
             },
             {
-              "type": "text",
-              "text": "ห้ามบันทึก คัดลอก เผยแพร่ ส่งต่อ หรือใช้ข้อมูลนอกเหนือภารกิจราชการโดยเด็ดขาด หากตรวจพบจะทำการระงับสิทธิ์ใช้งานทันที และดำเนินการตามระเบียบที่เกี่ยวข้อง",
-              "size": "sm",
-              "color": "#FECACA",
-              "wrap": true,
-              "margin": "sm"
+              type: 'text',
+              text: 'ห้ามบันทึก คัดลอก เผยแพร่ ส่งต่อ หรือใช้ข้อมูลนอกเหนือภารกิจราชการโดยเด็ดขาด หากตรวจพบจะทำการระงับสิทธิ์ใช้งานทันที และดำเนินการตามระเบียบที่เกี่ยวข้อง',
+              size: 'md',
+              color: '#FECACA',
+              wrap: true,
+              margin: 'sm'
             }
           ]
         },
         {
-          "type": "box",
-          "layout": "vertical",
-          "backgroundColor": "#0F172A",
-          "cornerRadius": "14px",
-          "paddingAll": "14px",
-          "contents": [
+          type: 'box',
+          layout: 'vertical',
+          backgroundColor: '#0F172A',
+          cornerRadius: '18px',
+          paddingAll: '16px',
+          contents: [
             {
-              "type": "text",
-              "text": "🪪 การยืนยันตัวตน",
-              "weight": "bold",
-              "size": "md",
-              "color": "#F8FAFC"
+              type: 'text',
+              text: '🪪 การยืนยันตัวตน',
+              weight: 'bold',
+              size: 'lg',
+              color: '#F8FAFC'
             },
             {
-              "type": "text",
-              "text": "แจ้งข้อมูลที่ถูกต้องไม่เป็นเท็จ และ รับผิดชอบบัญชีการใช้งานของท่านแต่เพียงผู้เดียวเท่านั้น",
-              "size": "sm",
-              "color": "#CBD5E1",
-              "wrap": true,
-              "margin": "sm"
+              type: 'text',
+              text: 'แจ้งข้อมูลที่ถูกต้องไม่เป็นเท็จ และรับผิดชอบบัญชีการใช้งานของท่านแต่เพียงผู้เดียวเท่านั้น',
+              size: 'md',
+              color: '#CBD5E1',
+              wrap: true,
+              margin: 'sm'
             }
           ]
         }
       ]
     },
-    "footer": {
-      "type": "box",
-      "layout": "vertical",
-      "backgroundColor": "#050B18",
-      "paddingAll": "18px",
-      "contents": [
+    footer: {
+      type: 'box',
+      layout: 'vertical',
+      backgroundColor: '#050B18',
+      paddingAll: '18px',
+      contents: [
         {
-          "type": "button",
-          "style": "primary",
-          "height": "sm",
-          "color": "#1D4ED8",
-          "action": {
-            "type": "message",
-            "label": "ยินยอมรับข้อตกลง",
-            "text": "ยินยอมรับข้อตกลง"
+          type: 'button',
+          style: 'primary',
+          height: 'md',
+          color: '#005BEA',
+          action: {
+            type: 'message',
+            label: 'ยินยอมรับข้อตกลง',
+            text: 'ยินยอมรับข้อตกลง'
           }
         }
       ]
