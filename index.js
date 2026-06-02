@@ -4880,7 +4880,7 @@ color:'#EAB308',
 action:{
 type:'uri',
 label:'📩 ติดต่อแอดมิน',
-uri:'https://line.me/ti/p/mVmD-ncfvU'
+uri:'https://line.me/ti/p/x71q8bIzZp'
 }
 },
 
