@@ -4561,7 +4561,7 @@ function buildContactAdminFlex() {
       action: {
         type: 'uri',
         label: '👤 ติดต่อ ADMIN',
-        uri: 'https://line.me/ti/p/mVmD-ncfvU'
+        uri: 'https://line.me/ti/p/x71q8bIzZp'
             }
           }
         ]
@@ -4772,7 +4772,7 @@ function buildWelcomeWarningFlex() {
             action: {
               type: 'uri',
               label: 'ติดต่อ ADMIN',
-              uri: 'https://line.me/ti/p/mVmD-ncfvU'
+              uri: 'https://line.me/ti/p/x71q8bIzZp'
             }
           }
         ]
@@ -6971,7 +6971,7 @@ text:`⛔สิทธิ์สืบค้นคำสั่ง DTAC ถูก�
 
 📂ต้องการใช้งานติดต่อ admin📂
 Contact Admin:
-https://line.me/ti/p/mVmD-ncfvU
+https://line.me/ti/p/x71q8bIzZp
 ------------`
 });
 }
@@ -7178,7 +7178,7 @@ text:`⛔สิทธิ์สืบค้นคำสั่งประกั�
 
 📂ต้องการใช้งานติดต่อ admin📂
 Contact Admin:
-https://line.me/ti/p/mVmD-ncfvU
+https://line.me/ti/p/x71q8bIzZp
 ------------`
 });
 }
