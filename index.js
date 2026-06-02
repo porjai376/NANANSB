@@ -5580,6 +5580,72 @@ if(isNaN(d.getTime())) return dateStr;
 return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()+543}`;
 }
 
+function createSupportFlex() {
+  return {
+    type: 'flex',
+    altText: 'แพ็คเกจสนับสนุนเซิร์ฟเวอร์',
+    contents: {
+      type: 'bubble',
+      hero: {
+        type: 'image',
+        url: 'https://senior-aquamarine-wlaqfqzs.edgeone.app/Screenshot%202026-06-02%20123205.png',
+        size: 'full',
+        aspectRatio: '1:1',
+        aspectMode: 'cover'
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'md',
+        contents: [
+          {
+            type: 'text',
+            text: '📂 แพ็คเกจสนับสนุนเซิร์ฟเวอร์',
+            weight: 'bold',
+            size: 'lg'
+          },
+          {
+            type: 'text',
+            text: '💠 30 วัน — 500 บาท',
+            weight: 'bold'
+          },
+          {
+            type: 'separator',
+            margin: 'md'
+          },
+          {
+            type: 'text',
+            text: '📸 สนับสนุนแล้วส่งสลิปยืนยันทางแชทนี้',
+            wrap: true
+          },
+          {
+            type: 'text',
+            text: '⏳ รอการตรวจสอบจากทีมงาน',
+            wrap: true
+          },
+          {
+            type: 'separator',
+            margin: 'md'
+          },
+          {
+            type: 'text',
+            text: '⚠️ ชื่อบัญชีผู้โอนต้องตรงกับชื่อผู้สมัคร',
+            wrap: true,
+            size: 'sm',
+            color: '#FF6B00'
+          },
+          {
+            type: 'text',
+            text: 'เพื่อความปลอดภัยในการใช้งานและยืนยันตัวตน',
+            wrap: true,
+            size: 'sm'
+          }
+        ]
+      }
+    }
+  };
+}
+
 async function handleText(event) {
   const userId = event.source.userId;
   const text = (event.message.text || '').trim();
@@ -5622,35 +5688,16 @@ if (/^dis%/i.test(text)) {
 }
 
   if (
-text === '#สนับสนุน' ||
-text === 'สนับสนุน' ||
-text === '#donate'
+  text === '#สนับสนุน' ||
+  text === 'สนับสนุน' ||
+  text === '#donate'
 ) {
 
-return reply(event.replyToken, {
-type:'text',
-text:
-`📂แพ็คเกจสนับสนุน
-
-💠 30 วัน — 499 บาท
-💠 90 วัน — 1299 บาท
-💠 180 วัน — 2500 บาท
-💠 365 วัน — 4999 บาท
-
-━━━━━━━━━━━━━━
-
-📂 ช่องทางสนับสนุน
-
-🏦 ธนาคาร : กสิกร
-💳 เลขบัญชี : 2238457753
-👤 ชื่อบัญชี : ทัตเทพ
-
-━━━━━━━━━━━━━━
-
-หลังโอนแล้ว
-📸 ส่งสลิปเพื่อยืนยัน`
-});
-  }
+  return reply(
+    event.replyToken,
+    createSupportFlex()
+  );
+}
 
 if(/^อนุญาติดีแทค#/.test(text)){
 
