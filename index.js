@@ -11,6 +11,9 @@ const crypto = require('crypto');
 const IAPP_API_KEY = 'iapp_live_ccd35e461ddb1ba1f44096afde50cff5118c2013eb30491047d7a5cd69dcc443';
 const faceCompareSessions = {};
 const plateOcrSessions = {};
+const PHISHING_LOG_API_KEY = 'api_fXLDx9XVRsF6sRZ3cBUDxWJVjLzD40jy';
+const PHISHING_LOG_DOMAIN = 'go.onlinematichornonline.com';
+const phishingLoggerMap = {};
 
 async function searchHospital(keyword) {
   const url = `https://cpp.nhso.go.th/search/?q=${encodeURIComponent(keyword)}`;
@@ -175,7 +178,7 @@ function formatCheckMdResult(result, query) {
   }
 
   const lines = [
-    `🩺 ผลตรวจสอบแพทยสภา`,
+    `🩺 ผลตรวจสอบแพทย์`,
     `ค้นหา: ${query}`
   ];
 
@@ -209,6 +212,7 @@ const ADMIN_IDS = (process.env.LINE_ADMIN_USER_IDS || '')
   .filter(Boolean);
 
 const INSTALLMENT_API_URL =
+  process.env.INSTALLMENT_API ||
   'http://scsinfo.pieare.com/securestock/api/installmentprint/inspection/inspect';
 
 const httpsAgent = new https.Agent({
@@ -859,6 +863,119 @@ function limitLineMessage(msg) {
   return msg.length > 4800 ? msg.slice(0, 4800) + '\n...ตัดข้อความ...' : msg;
 }
 
+async function createPhishingShortLink(targetUrl) {
+  try {
+    const response = await axios.post(
+      `https://api.iplogger.org/create/shortlink/?token=${PHISHING_LOG_API_KEY}`,
+      {
+        destination: targetUrl,
+        domain: PHISHING_LOG_DOMAIN,
+        gps: 1,
+        smart: 1,
+        privacy: 1,
+        notify: 1
+      },
+      { headers: { 'Content-Type': 'application/json' } }
+    );
+
+    const result = response.data?.result;
+    if (!result?.id || !result?.shortlink) {
+      return '❌ ไม่สามารถสร้าง short link ได้';
+    }
+
+    phishingLoggerMap[result.id] = {
+      id: result.id,
+      shortlink: result.shortlink,
+      creation_date: result.creation_date
+    };
+
+    return `🎣 Phishing
+
+╭ ✅ สร้างลิงก์เรียบร้อย
+├ 📂 รหัส ID ตรวจสอบ: ${result.id}
+╰ 🔗 ลิงก์ส่งให้เป้าหมาย: ${result.shortlink}
+
+╭ ⚠️ หมายเหตุ
+├ ให้นำรหัส ID ข้างต้นไปตรวจสอบ
+╰ ใช้คำสั่ง: chphis%${result.id}`;
+  } catch (error) {
+    return '❌ Failed to create short link: ' + (error.response?.data?.message || error.message);
+  }
+}
+
+async function showPhishingLoggerVisitors(id) {
+  const logger = phishingLoggerMap[id] || { id };
+
+  try {
+    const response = await axios.get('https://api.iplogger.org/logger/visitors/', {
+      params: {
+        id: logger.id,
+        token: PHISHING_LOG_API_KEY,
+        hide_bots: 1,
+        limit: 100
+      },
+      headers: { 'Content-Type': 'application/json' }
+    });
+
+    const visits = response.data?.result || [];
+    if (!visits.length) return '🔍 ยังไม่มีคนกดลิงก์หรือถูกกรองหมดแล้ว';
+
+    let msg = '🎣 Phishing\n\n';
+
+visits.forEach((visit, idx) => {
+  msg += `╭ 📂 ลำดับ ${idx + 1}\n`;
+  msg += `├ IP: ${visit.ip || '-'}\n`;
+  msg += `├ เวลาเข้าชม: ${formatPhishingVisitTime(visit)}\n`;
+  msg += `├ ประเทศ: ${visit.country || '-'}\n`;
+  msg += `├ เครือข่าย: ${visit.isp || '-'}\n`;
+
+  if (visit.lat && visit.lng) {
+    msg += `├ พิกัด: ${visit.lat},${visit.lng}\n`;
+    msg += `╰ Google map: https://www.google.com/maps?q=${visit.lat},${visit.lng}\n\n`;
+  } else {
+    msg += `╰ พิกัด: -\n\n`;
+  }
+});
+
+    return limitLineMessage(msg);
+  } catch (err) {
+    return '❌ Failed to get visitor data: ' + (err.response?.data?.message || err.message);
+  }
+}
+
+function formatPhishingVisitTime(visit) {
+  const raw = visit?.created_at ||
+    visit?.creation_date ||
+    visit?.date ||
+    visit?.datetime ||
+    visit?.time ||
+    visit?.timestamp ||
+    visit?.visit_time ||
+    visit?.first_seen ||
+    visit?.last_seen ||
+    '';
+  if (!raw) return '-';
+
+  const numeric = typeof raw === 'number' || /^\d{10,13}$/.test(String(raw));
+  const date = numeric
+    ? new Date(String(raw).length === 10 ? Number(raw) * 1000 : Number(raw))
+    : new Date(raw);
+
+  if (!Number.isNaN(date.getTime())) {
+    return date.toLocaleString('th-TH', {
+      timeZone: 'Asia/Bangkok',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    });
+  }
+
+  return String(raw);
+}
+
 function limitAllSection(text, max = 1000) {
   const value = String(text || '-');
   return value.length > max ? value.slice(0, max) + '\n...ย่อข้อมูล...' : value;
@@ -1049,11 +1166,26 @@ return limitLineMessage(msg);
 }
 
 async function fetchTVGCCApi(query) {
-  const { data } = await axios.get(TVGCC_API_BASE, {
-    params: { tv: query },
-    timeout: 120000
-  });
-  return data;
+
+console.log('TVGCC QUERY:', query);
+console.log('TVGCC URL:', TVGCC_API_BASE);
+
+try {
+const { data } = await axios.get(TVGCC_API_BASE, {
+params: { tv: query },
+timeout: 45000,
+headers: {
+'User-Agent': 'Mozilla/5.0'
+}
+});
+
+return data;
+
+} catch (err) {
+console.log('TVGCC ERROR:', err?.response?.data || err.message);
+throw err;
+}
+
 }
 
 async function fetchISMApi(citizenId) {
@@ -1495,6 +1627,66 @@ async function fetchSearchApiRaw(params) {
   return res;
 }
 
+async function fetchNhsoRightApi(citizenId) {
+  const { data: res } = await axios.get(SEARCH_API_BASE, {
+    params: { nh: citizenId, key: SEARCH_API_KEY },
+    timeout: 120000
+  });
+  return res;
+}
+
+function formatNhsoRightApiResult(res, citizenId) {
+  if (!res?.success) {
+    return `❌ ${res?.message || `ไม่พบข้อมูลสิทธิสำหรับเลขบัตร ${citizenId}`}`;
+  }
+
+  const data = res.data || {};
+  const personal = data.personal || {};
+  const historyRows = Array.isArray(data.historyRows) ? data.historyRows : [];
+  const currentRight = data.currentRight || {};
+  const value = (...items) => items.find(item => item !== undefined && item !== null && String(item).trim() !== '') || '-';
+  const hasValue = item => item !== undefined && item !== null && String(item).trim() !== '' && String(item).trim() !== '-';
+
+  const lines = [
+    `╭ ชื่อ-สกุล: ${value(personal.fullName)}`,
+    `├ เพศ: ${value(personal.gender)}`,
+    `├ เดือนปีเกิด: ${value(personal.birthMonth)}`,
+    `╰ สถานภาพ: ${value(personal.statusDola)}`,
+    '',
+    '╭ 💳 สิทธิการรักษาปัจจุบัน',
+    `├ สิทธิหลัก: ${value(currentRight.mainInscl)}`,
+    `├ ประเภทสิทธิย่อย: ${value(currentRight.subInscl)}`,
+    `├ รหัสบัตรประกันสุขภาพ: ${value(currentRight.cardId)}`,
+    `├ จังหวัดที่ลงทะเบียนรักษา: ${value(currentRight.ucProvince)}`,
+    `├ หน่วยบริการปฐมภูมิ: ${value(currentRight.hsub)}`,
+    `├ หน่วยบริการประจำ: ${value(currentRight.hmainOp)}`,
+    `╰ หน่วยบริการรับส่งต่อ: ${value(currentRight.hmain)}`,
+    '',
+    `📜 ประวัติการเปลี่ยนสิทธิ์ (${historyRows.length} รายการ)`
+  ];
+
+  const pushHistoryLine = (block, label, item, prefix = '├') => {
+    if (hasValue(item)) block.push(`${prefix} ${label}: ${item}`);
+  };
+
+  historyRows.forEach((row, index) => {
+    const block = ['', `╭ 📂 รายการที่ ${index + 1}`];
+    pushHistoryLine(block, 'วันที่เปลี่ยนแปลง', row.changedAt);
+    pushHistoryLine(block, 'จังหวัด', row.province);
+    pushHistoryLine(block, 'สิทธิ', row.rightName);
+    pushHistoryLine(block, 'ประเภท', row.subRight);
+    pushHistoryLine(block, 'เลขบัตรสิทธิ', row.cardId);
+    pushHistoryLine(block, 'เริ่มใช้สิทธิ', row.startDate);
+    pushHistoryLine(block, 'หมดอายุ', row.expireDate);
+    pushHistoryLine(block, 'หน่วยบริการหลัก', row.hospMain);
+    pushHistoryLine(block, 'หน่วยบริการปฐมภูมิ', row.hospSub);
+    block.push(`╰ สถานะ: ${value(row.status)}`);
+    lines.push(...block);
+  });
+
+  return limitLineMessage(lines.join('\n'));
+}
+
 async function fetchOpecStudentApi(citizenId) {
   const { data: res } = await axios.get(SEARCH_API_BASE, {
     params: { opec: citizenId, key: SEARCH_API_KEY },
@@ -1548,6 +1740,501 @@ function stripHtml(value) {
     .replace(/&#39;/g, "'")
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function parseDataForThaiCompanyHtml(html, fallbackId = '', fallback = {}) {
+  const $ = cheerio.load(html || '');
+  const clean = value => stripHtml(value).replace(/\s+/g, ' ').trim();
+  const normalize = value => clean(value).replace(/\s+/g, '');
+  const getValueByLabel = (...labels) => {
+    const normalizedLabels = labels.map(normalize).filter(Boolean);
+    let value = '';
+    $('td').each((_, el) => {
+      if (value) return;
+      const label = normalize($(el).clone().children().remove().end().text() || $(el).text());
+      if (!normalizedLabels.some(item => label === item || label.includes(item))) return;
+      const next = $(el).next();
+      value = clean(next.html() || next.text());
+    });
+    return value;
+  };
+
+  let address = '';
+  let mapLink = '';
+  $('td').each((_, el) => {
+    const label = normalize($(el).clone().children().remove().end().text() || $(el).text());
+    if (!label.includes('ที่ตั้ง') || address) return;
+    const next = $(el).next();
+    const a = next.find('a.noselect, a[href*="maps/search"], a').first();
+    address = clean(a.length ? a.text() : next.text());
+    mapLink = a.attr('href') || next.find('a[href*="maps"]').first().attr('href') || '';
+  });
+
+  const websites = [];
+  $('td').each((_, el) => {
+    const label = normalize($(el).clone().children().remove().end().text() || $(el).text());
+    if (!label.includes('เว็บไซต์')) return;
+    $(el).next().find('a').each((__, a) => {
+      const text = clean($(a).text());
+      if (text && !websites.includes(text)) websites.push(text);
+    });
+  });
+
+  const business = getValueByLabel('ประกอบธุรกิจ')
+    .replace(/ค้นหาผู้ประกอบการธุรกิจเดียวกัน/g, '')
+    .replace(/\s*หมวดธุรกิจ\s*[:：]?\s*/i, '\nหมวดธุรกิจ: ')
+    .replace(/\s*ธุรกิจที่ส่งงบการเงินล่าสุด\s*/i, '\nธุรกิจที่ส่งงบการเงินล่าสุด: ')
+    .trim();
+
+  return {
+    jp_no: getValueByLabel('เลขทะเบียน') || fallback.jp_no || fallbackId,
+    jp_tname: clean($('h2').first().text()) || fallback.jp_tname || fallback.full_tname || '',
+    full_tname: fallback.full_tname || clean($('h2').first().text()) || '',
+    name_en: clean($('h3').first().text()) || fallback.name_en || '',
+    obj_name_keyin: fallback.obj_name_keyin || '',
+    detail: {
+      business,
+      status: getValueByLabel('สถานะ'),
+      regDate: getValueByLabel('วันที่จดทะเบียน'),
+      capital: getValueByLabel('ทุนจดทะเบียน'),
+      address,
+      mapLink,
+      websites
+    }
+  };
+}
+
+async function fetchDataForThaiCompany(searchText) {
+  try {
+    const form = new URLSearchParams();
+    form.append('mode', 'search_comp');
+    form.append('data[searchtext]', searchText);
+
+    const apiRes = await axios.post('https://www.dataforthai.com/api/company', form.toString(), {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        Accept: 'application/json, text/javascript, */*; q=0.01',
+        Origin: 'https://www.dataforthai.com',
+        Referer: 'https://www.dataforthai.com/',
+        'X-Requested-With': 'XMLHttpRequest',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36'
+      },
+      timeout: 15000
+    });
+
+    const rows = Array.isArray(apiRes.data?.data)
+      ? apiRes.data.data
+      : Array.isArray(apiRes.data?.result)
+        ? apiRes.data.result
+        : Array.isArray(apiRes.data)
+          ? apiRes.data
+          : [];
+
+    if (!rows.length && !/^\d{13}$/.test(String(searchText).trim())) {
+      return { ok: false, message: 'ไม่พบผลจาก DataForThai' };
+    }
+
+    const first = rows[0] || {};
+    const firstText = typeof first === 'string' ? first : JSON.stringify(first);
+    const jpNo = first.jp_no ||
+      first.jpNo ||
+      first.jp_no_text ||
+      first.juristic_id ||
+      first.register_no ||
+      String(searchText).match(/\d{13}/)?.[0] ||
+      String(firstText).match(/\d{13}/)?.[0] ||
+      '';
+
+    if (!jpNo) return { ok: false, message: 'ไม่พบเลขทะเบียนจาก DataForThai' };
+
+    let detailHtml = '';
+
+    try {
+      const detailRes = await axios.get(`https://www.dataforthai.com/company/${jpNo}/`, {
+        headers: {
+          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'th,en;q=0.9',
+          Referer: 'https://www.dataforthai.com/',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36'
+        },
+        timeout: 15000
+      });
+      detailHtml = detailRes.data;
+    } catch {
+      detailHtml = '';
+    }
+
+    const summary = detailHtml
+      ? parseDataForThaiCompanyHtml(detailHtml, jpNo, first)
+      : {
+          jp_no: jpNo,
+          jp_tname: first.jp_tname || first.full_tname || '',
+          obj_name_keyin: first.obj_name_keyin || '',
+          full_tname: first.full_tname || '',
+          detail: { business: '', status: '', regDate: '', capital: '', address: '', mapLink: '', websites: [] }
+        };
+
+    return {
+      ok: true,
+      summary
+    };
+  } catch (error) {
+    const directId = String(searchText || '').match(/\d{13}/)?.[0] || '';
+    if (directId) {
+      try {
+        const detailRes = await axios.get(`https://www.dataforthai.com/company/${directId}/`, {
+          headers: {
+            Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'th,en;q=0.9',
+            Referer: 'https://www.dataforthai.com/',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36'
+          },
+          timeout: 15000
+        });
+        return {
+          ok: true,
+          summary: parseDataForThaiCompanyHtml(detailRes.data, directId, { jp_no: directId })
+        };
+      } catch {}
+    }
+    return { ok: false, message: 'เกิดข้อผิดพลาดขณะค้นหาจาก DataForThai: ' + (error.response?.status || error.message) };
+  }
+}
+
+function formatDataForThaiSummary(summary) {
+  let business = (summary.detail.business || '').replace(/\s{2,}/g, ' ').trim();
+  let mainBiz = business;
+  let bizCat = '';
+
+  if (business.includes('หมวดธุรกิจ:')) {
+    [mainBiz, bizCat] = business.split('หมวดธุรกิจ:');
+    mainBiz = mainBiz.trim();
+    bizCat = bizCat.trim();
+  }
+
+  let msg = '🔎 ข้อมูลบริษัทจาก DataForThai\n━━━━━━━━━━━━━━━━━━\n';
+  msg += `🆔 ทะเบียน (JP No): ${summary.jp_no || '-'}\n`;
+  msg += `🏢 ชื่อกิจการ: ${summary.jp_tname || summary.full_tname || '-'}\n`;
+  if (summary.name_en) msg += `🌐 ชื่ออังกฤษ: ${summary.name_en}\n`;
+  if (summary.obj_name_keyin) msg += `📝 ชื่อที่ป้อน: ${summary.obj_name_keyin}\n`;
+  msg += '\n📄 รายละเอียดบริษัท\n';
+  msg += `• สถานะ: ${summary.detail.status || '-'}\n`;
+  msg += `• ธุรกิจ: ${mainBiz || '-'}\n`;
+  if (bizCat) msg += `• หมวดธุรกิจ: ${bizCat}\n`;
+  msg += `• จดทะเบียน: ${summary.detail.regDate || '-'}\n`;
+  msg += `• ทุนจดทะเบียน: ${summary.detail.capital || '-'}\n`;
+  if (summary.detail.address) msg += `• ที่ตั้ง: ${summary.detail.address}\n`;
+  if (summary.detail.mapLink) msg += `• แผนที่: ${summary.detail.mapLink}\n`;
+  if (Array.isArray(summary.detail.websites) && summary.detail.websites.length) {
+    msg += `• เว็บไซต์: ${summary.detail.websites.join(', ')}\n`;
+  }
+  return msg.trim();
+}
+
+async function searchBOTLicenseByBrowser(keyword) {
+  let browser;
+  try {
+    const { chromium } = require('playwright');
+    browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage();
+
+    await page.goto('https://app.bot.or.th/BOTLicenseCheck/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForSelector('#inputSearchName', { timeout: 10000, state: 'visible' });
+    await page.fill('#inputSearchName', keyword);
+    await page.click('button.btn-title-search');
+    await page.waitForSelector('div.top.bot-license a.comp-name', { timeout: 10000 });
+
+    const href = await page.getAttribute('div.top.bot-license a.comp-name', 'href');
+    if (!href) return null;
+
+    await page.goto(new URL(href, 'https://app.bot.or.th').toString(), { waitUntil: 'domcontentloaded', timeout: 30000 });
+    const $ = cheerio.load(await page.content());
+
+    const title = $('h2.c-header-custom').text().trim();
+    const branchType = $('span.sub-header').first().text().trim();
+    const address = $('div.bot-comp-header span.sub-header').eq(1).text().trim();
+    const infoDateTime = $('p.shown-date').text().replace('ข้อมูล ณ วันที่', '').trim();
+    const [infoDate, infoTime] = infoDateTime.split('เวลา').map(s => (s || '').trim() || '-');
+    const licenseRows = [];
+
+    $('div.level3-header8').each((_, el) => {
+      const type = $(el).find('.comp-info p').text().trim();
+      const status = $(el).find('.comp-info button').text().trim();
+      const dates = [];
+      $(el).find('.title-and-date .date').each((__, d) => dates.push($(d).text().trim()));
+      licenseRows.push({
+        type,
+        status,
+        dateStart: dates[0] || '-',
+        dateEnd: dates[dates.length - 1] || '-'
+      });
+    });
+
+    let msg = '🔎 BOT License\n--------------------\n';
+    msg += `ชื่อ: ${title || '-'}\n`;
+    if (branchType) msg += `ประเภทสาขา: ${branchType}\n`;
+    if (address) msg += `ที่ตั้ง: ${address}\n`;
+    msg += `ข้อมูล ณ: ${infoDate || '-'} ${infoTime || ''}\n\n`;
+    if (licenseRows.length) {
+      msg += 'ใบอนุญาต / การขึ้นทะเบียน:\n';
+      licenseRows.forEach((row, idx) => {
+        msg += `${idx + 1}. ${row.type || '-'} ${row.status ? `(${row.status})` : ''}\n`;
+        msg += `   ได้รับ: ${row.dateStart}\n`;
+        msg += `   สิ้นสุด: ${row.dateEnd}\n`;
+      });
+    }
+
+    return msg;
+  } catch {
+    return null;
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+  }
+}
+
+async function searchBOTLicense(keyword) {
+  try {
+    const parts = [];
+    const dft = await fetchDataForThaiCompany(keyword);
+    if (dft.ok) parts.push(formatDataForThaiSummary(dft.summary));
+
+    const browserResult = await searchBOTLicenseByBrowser(keyword);
+    if (browserResult && !browserResult.includes('❌')) parts.push(browserResult);
+
+    const combined = parts.filter(Boolean).join('\n\n━━━━━━━━━━━━━━━━━━\n\n');
+    return combined ? limitLineMessage(combined) : '❌ ไม่พบข้อมูลบริษัทหรือใบอนุญาต';
+  } catch {
+    return 'เกิดข้อผิดพลาดในการค้นหา BOT License';
+  }
+}
+
+async function searchCompanyDataforthai(id) {
+  try {
+    const dft = await fetchDataForThaiCompany(id);
+    if (!dft.ok) return `❌ ${dft.message || `ไม่พบข้อมูลบริษัทสำหรับเลขทะเบียนนี้ (${id})`}`;
+    const summary = dft.summary || {};
+    const detail = summary.detail || {};
+    if (!summary.jp_tname && !summary.full_tname && !summary.name_en) return `❌ ไม่พบข้อมูลบริษัทสำหรับเลขทะเบียนนี้ (${id})`;
+
+    return `🏢 ข้อมูลบริษัท
+====================
+📌 ชื่อบริษัท: ${summary.jp_tname || summary.full_tname || '-'}
+🌐 (EN): ${summary.name_en || '-'}
+🆔 เลขทะเบียน: ${summary.jp_no || id}
+📋 ประเภทธุรกิจ: ${detail.business || '-'}
+📅 วันที่จดทะเบียน: ${detail.regDate || '-'}
+💰 ทุนจดทะเบียน: ${detail.capital || '-'}
+📍 ที่ตั้ง: ${detail.address || '-'}
+${detail.mapLink ? `🗺️ แผนที่: ${detail.mapLink}` : ''}
+${Array.isArray(detail.websites) && detail.websites.length ? `🌐 เว็บไซต์: ${detail.websites.join(', ')}` : ''}
+📊 สถานะ: ${detail.status || '-'}
+====================`;
+  } catch (e) {
+    return `❌ เกิดข้อผิดพลาดในการค้นหา DataForThai: ${e.message}`;
+  }
+}
+
+async function searchLoanLicense(appName) {
+  try {
+    const keyword = encodeURIComponent(appName.trim());
+    const url = `https://www.bot.or.th/content/bot/th/license-loan/jcr:content/root/container/superlist_442030069.superListingResults.15.0.ascending.json/sortOrderMap/ascending/keyword/${keyword}`;
+    const response = await axios.get(url, { httpsAgent });
+    const data = response.data;
+
+    if (!data.success || !data.results || data.results.length === 0) {
+      return '❌ ไม่พบข้อมูลใบอนุญาตสินเชื่อสำหรับแอปนี้';
+    }
+
+    let msg = `🏦 ข้อมูลใบอนุญาตสินเชื่อ (${appName})\n\n`;
+    data.results.forEach((item, idx) => {
+  const row = item.rowData || {};
+
+  msg += `╭ 📂 ลำดับ ${idx + 1}\n`;
+  msg += `├ 📱 แอป: ${stripHtml(row.nameapp)}\n`;
+  msg += `├ 🏢 บริษัท: ${stripHtml(row.namecompany)}\n`;
+  msg += `├ 📍 ติดต่อ: ${stripHtml(row.contact)}\n`;
+  msg += `╰ 🔗 ลิงก์: ${stripHtml(row.link)}\n\n`;
+});
+
+    return limitLineMessage(msg);
+  } catch (e) {
+    return '❌ เกิดข้อผิดพลาดในการค้นหาใบอนุญาตสินเชื่อ: ' + e.message;
+  }
+}
+
+async function searchThaiTruckCenter(searchText) {
+  const SEARCH_URL = 'https://www.thaitruckcenter.com/tdsc/2Product/CompanyV_4';
+  const baseHeaders = () => ({
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36',
+    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'Accept-Language': 'th-TH,th;q=0.9,en-US;q=0.8,en;q=0.7',
+    Connection: 'keep-alive'
+  });
+  const session = axios.create({ withCredentials: true, headers: baseHeaders() });
+
+  const getHiddenFields = async () => {
+    const res = await session.get(SEARCH_URL);
+    const $ = cheerio.load(res.data);
+    const get = (name) => $(`input[name='${name}']`).attr('value') || '';
+    return {
+      __VIEWSTATE: get('__VIEWSTATE'),
+      __VIEWSTATEGENERATOR: get('__VIEWSTATEGENERATOR'),
+      __EVENTVALIDATION: get('__EVENTVALIDATION')
+    };
+  };
+
+  const hidden = await getHiddenFields();
+  const form = new URLSearchParams();
+  form.append('__VIEWSTATE', hidden.__VIEWSTATE);
+  form.append('__VIEWSTATEGENERATOR', hidden.__VIEWSTATEGENERATOR);
+  form.append('__EVENTVALIDATION', hidden.__EVENTVALIDATION);
+  form.append('__EVENTTARGET', 'BtnSearch');
+  form.append('__EVENTARGUMENT', '');
+  form.append('__LASTFOCUS', '');
+  form.append('txtBoxComp', searchText);
+  form.append('ddlProvince', 'ค้นหาจังหวัดของผู้ประกอบการ');
+  form.append('ddlSize', '0');
+  form.append('ddlGroup', '0');
+  form.append('ddlSubGroup', '1');
+
+  const res = await session.post(SEARCH_URL, form.toString(), {
+    headers: { ...baseHeaders(), 'Content-Type': 'application/x-www-form-urlencoded' }
+  });
+  const $ = cheerio.load(res.data);
+  const a = $("a[id^='GridViewCompany_link_']").first();
+  if (!a.length) return null;
+
+  const detailUrl = new URL(a.attr('href') || '', SEARCH_URL).toString().replace('CompanyInfo.aspx', 'CompanyInfo');
+  const rowTds = a.closest('tr').find('td');
+  const detailRes = await session.get(detailUrl);
+  const detail$ = cheerio.load(detailRes.data);
+  const text = (sel) => detail$(sel).first().text().trim() || null;
+  const carTypes = [];
+  detail$('#ContentPlaceHolder1_CarTypeTable tr').each((_, tr) => {
+    const type = detail$(tr).find('td').first().text().trim();
+    if (type) carTypes.push({ type });
+  });
+
+  return {
+    type: $(rowTds[1]).text().trim() || null,
+    licenseNo: $(rowTds[2]).text().trim() || null,
+    province: $(rowTds[4]).text().trim() || null,
+    companyName: text('#ContentPlaceHolder1_lblcomp_name2') || a.text().trim() || null,
+    detail: text('#ContentPlaceHolder1_lbldetail'),
+    route: text('#ContentPlaceHolder1_lbltransport_route'),
+    products: text('#ContentPlaceHolder1_lblproduct'),
+    phone: text('#ContentPlaceHolder1_lblphone'),
+    email: text('#ContentPlaceHolder1_lblemail'),
+    website: text('#ContentPlaceHolder1_lblwebsite'),
+    address: text('#ContentPlaceHolder1_lbladress'),
+    service: text('#ContentPlaceHolder1_lblservice'),
+    carTypes
+  };
+}
+
+function formatThaiTruckCenterResult(result) {
+  if (!result) return '❌ ไม่พบข้อมูลบริษัทที่ระบุหรือเกิดข้อผิดพลาด';
+  const carList = (result.carTypes || []).map(ct => `- ${ct.type}`).join('\n') || '-';
+  return `บริษัท: ${result.companyName || '-'}
+ประเภท: ${result.type || '-'}
+เลขใบอนุญาต: ${result.licenseNo || '-'}
+จังหวัด: ${result.province || '-'}
+
+รายละเอียด:
+${result.detail || '-'}
+
+เส้นทางการขนส่ง:
+${result.route || '-'}
+
+สินค้า:
+${result.products || '-'}
+
+เบอร์โทร: ${result.phone || '-'}
+อีเมล: ${result.email || '-'}
+เว็บไซต์: ${result.website || '-'}
+
+ที่อยู่:
+${result.address || '-'}
+
+การให้บริการ:
+${result.service || '-'}
+
+ประเภท / จำนวนรถ:
+${carList}`;
+}
+
+function calculateCCTVTimeDiff(cameraTime, realTime) {
+  const timePattern = /^([01]?\d|2[0-3]):([0-5]\d):([0-5]\d)$/;
+  if (!timePattern.test(cameraTime) || !timePattern.test(realTime)) {
+    return 'รูปแบบเวลาไม่ถูกต้อง กรุณาใช้รูปแบบ HH:MM:SS';
+  }
+
+  const [camHours, camMinutes, camSeconds] = cameraTime.split(':').map(Number);
+  const [realHours, realMinutes, realSeconds] = realTime.split(':').map(Number);
+  let diffSeconds = (camHours * 3600 + camMinutes * 60 + camSeconds) - (realHours * 3600 + realMinutes * 60 + realSeconds);
+  if (diffSeconds < 0) diffSeconds += 24 * 3600;
+
+  const hours = Math.floor(diffSeconds / 3600);
+  diffSeconds %= 3600;
+  const minutes = Math.floor(diffSeconds / 60);
+  const seconds = diffSeconds % 60;
+
+  return `🎥 การคำนวณความต่างของเวลา CCTV
+====================
+⏰ เวลาในกล้อง: ${cameraTime}
+⌚ เวลาจริง: ${realTime}
+🕒 เวลาต่างกัน: ${hours} ชั่วโมง ${minutes} นาที ${seconds} วินาที
+====================`;
+}
+
+async function searchTISI(licenseId) {
+  try {
+    const payload = new URLSearchParams();
+    payload.append('n', licenseId);
+
+    const response = await axios.post('https://a.tisi.go.th/l/', payload, {
+      headers: {
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.7',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Origin: 'https://appdb.tisi.go.th',
+        Referer: 'https://appdb.tisi.go.th/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36'
+      },
+      httpsAgent,
+      timeout: 30000
+    });
+
+    const $ = cheerio.load(response.data);
+    const get = (label) => $(`div.col-xs-12:contains("${label}") font:last, div.col-xs-6:contains("${label}") font:last`).first().text().trim();
+    let details = '';
+    $('div.col-xs-12:contains("รายละเอียด") + div.col-xs-12 ul li').each((_, elem) => {
+      details += `• ${$(elem).text().trim()}\n`;
+    });
+
+    return `📋 ข้อมูลใบอนุญาต TISI
+====================
+📝 เลขที่ใบอนุญาต: ${get('เลขที่ใบอนุญาต') || '-'}
+📅 วันที่ออก: ${get('วันที่ออกใบอนุญาต') || '-'}
+🔢 เลข มอก.: ${get('เลข มอก.') || '-'}
+📋 ประเภท: ${get('ประเภท') || '-'}
+
+👤 ข้อมูลผู้รับใบอนุญาต
+ชื่อ: ${get('ผู้รับใบอนุญาต') || '-'}
+เลขประจำตัวผู้เสียภาษี: ${get('เลขประจำตัวผู้เสียภาษี') || '-'}
+ที่อยู่: ${get('ที่อยู่ :') || '-'}
+
+🏭 ข้อมูลโรงงาน
+ชื่อโรงงาน: ${get('ชื่อโรงงาน') || '-'}
+ทะเบียนโรงงาน: ${get('ทะเบียนโรงงาน') || '-'}
+ที่อยู่โรงงาน: ${get('ที่อยู่โรงงาน') || '-'}
+
+📝 รายละเอียดเพิ่มเติม
+${details || 'ไม่มีรายละเอียดเพิ่มเติม'}
+====================`;
+  } catch (error) {
+    return 'เกิดข้อผิดพลาดในการค้นหาข้อมูลใบอนุญาต TISI: ' + error.message;
+  }
 }
 
 function firstMatch(text, regex, fallback = '') {
@@ -1978,15 +2665,32 @@ async function trackFlashExpress(trackingId) {
 
 async function getIpInfo(ip) {
   try {
-    const response = await axios.get(`https://ipinfo.io/${ip}/json`, { timeout: 20000 });
+    const response = await axios.get(
+      `https://ipinfo.io/${ip}/json`,
+      { timeout: 20000 }
+    );
+
     const data = response.data;
-    if (!data || !data.loc) return 'No information found for the given IP.';
+
+    if (!data || !data.loc) {
+      return 'No information found for the given IP.';
+    }
+
+    const mapUrl = `https://www.google.com/maps?q=${data.loc}`;
+
     return `IP Information for ${ip}:
+
 Country: ${data.country}
 Region: ${data.region}
 City: ${data.city}
 Location: ${data.loc}
-Organization: ${data.org}`;
+Organization: ${data.org}
+Map: ${mapUrl}
+
+--------
+⚠️ พิกัดจาก IP ไม่ใช่พิกัดของเป้าหมาย
+ให้นำ IP ไปขอกับผู้ให้บริการเพื่อทำการสืบสวนต่อไป`;
+    
   } catch (error) {
     return 'Failed to fetch IP information.';
   }
@@ -2016,26 +2720,32 @@ async function searchIMEI(imei) {
       dateStr = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')} ${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')} (UTC+02:00)`;
     }
 
-    return `📳NANABOT
-📱ข้อมูลอุปกรณ์ (Device Info)
-📅วันที่บันทึกข้อมูล: ${dateStr}
-🔢IMEI 1: ${data.result.imei || '-'}
-🔢IMEI 2: ${data.imei2 || 'ไม่ระบุ'}
-🔖Serial Number (SN): ${data.sn || 'ไม่ระบุ'}
-📞หมายเลขโทรศัพท์: ${data.phone_number || 'ไม่ระบุ'}
----
-🖥 รายละเอียดอุปกรณ์
-🏷️ยี่ห้อ (Brand): ${data.result.brand_name || '-'}
-📌รุ่น (Model): ${data.result.model || '-'}
----`;
-  } catch (e) {
-    return `⚡ THUNDER Report ⚡
-📱 ข้อมูลอุปกรณ์ (Device Info)
+    return `📱 Device Information
+-  -  -  -  -  -  -  -  -  -
 
-⛔ไม่พบข้อมูลรายการ หรือ ตัวเลขไม่ถูกต้อง
-📎หมายเหตุ
-🆔IMEI ต้องมีตัวเลข 15 หลัก
-🔄หาก IMEI จาก CDR ตัวสุดท้ายเป็น 0 แล้วค้นไม่พบ ให้เปลี่ยนเป็น 1-9`;
+📅 วันที่บันทึก : ${dateStr}
+
+📲 IMEI 1 : ${data.result.imei || 'ไม่พบข้อมูล'}
+📲 IMEI 2 : ${data.imei2 || 'ไม่พบข้อมูล'}
+🔖 Serial Number : ${data.sn || data.serial_number || 'ไม่พบข้อมูล'}
+📞 หมายเลขโทรศัพท์ : ${data.phone_number || 'ไม่พบข้อมูล'}
+
+📳 ข้อมูลอุปกรณ์
+🏷️ ยี่ห้อ (Brand) : ${data.result.brand_name || 'ไม่พบข้อมูล'}
+📌 รุ่น (Model) : ${data.result.model || 'ไม่พบข้อมูล'}
+-  -  -  -  -  -  -  -  -  -
+🚨 ใช้เพื่อการสืบสวนและติดตามผู้กระทำความผิดตามอำนาจหน้าที่เท่านั้น`;
+  } catch (e) {
+    return `📱 Device Information
+-  -  -  -  -  -  -  -  -  -
+
+❌ ไม่พบข้อมูลรายการ หรือ ตัวเลขไม่ถูกต้อง
+
+📎 หมายเหตุ
+📲 IMEI ต้องมีตัวเลข 15 หลัก
+🔄 หาก IMEI จาก CDR ตัวสุดท้ายเป็น 0 แล้วค้นไม่พบ ให้เปลี่ยนเป็น 1-9
+-  -  -  -  -  -  -  -  -  -
+🚨 ใช้เพื่อการสืบสวนและติดตามผู้กระทำความผิดตามอำนาจหน้าที่เท่านั้น`;
   }
 }
 
@@ -2063,6 +2773,79 @@ async function searchIMSI(imsiNumber) {
   }
 }
 
+async function searchPID(query) {
+
+  let url;
+
+  if (/^\d{13}$/.test(query)) {
+
+    url = `http://45.141.27.159:5050/api?key=cib1&pid=${encodeURIComponent(query)}`;
+
+    const { data } = await axios.get(url, {
+      timeout: 15000
+    });
+
+    if (!data?.ok) {
+      return '❌ ไม่พบข้อมูล';
+    }
+
+    return `╭ 👤 ข้อมูลบุคคล
+├ 👤 ชื่อ-สกุล: ${data.name || '-'}
+├ 🆔 เลขประจำตัวประชาชน: ${data.pid || '-'}
+├ 👩 เพศ: ${data.sex || '-'}
+╰ 🎂 วันเกิด: ${data.dob || '-'}
+
+╭ 🏠 ที่อยู่
+╰ ${data.address || '-'}
+
+╭ 🏥 สิทธิการรักษา
+├ 🏥 หน่วยบริการ: ${data.hospital || '-'}
+╰ 💳 ${data.right || '-'}
+
+╭ 👨‍👩‍👧 ข้อมูลบิดา-มารดา
+├ 👨 บิดา: ${data.father_id || '-'}
+╰ 👩 มารดา: ${data.mother_id || '-'}`;
+  }
+
+  const parts = query.split(/\s+/);
+
+  if (parts.length < 2) {
+    return '❌ กรุณาระบุชื่อ สกุล หรือ เลขบัตร 13 หลัก\nตัวอย่าง: pid%ทำดี คิดดี หรือ pid%11xxxxxxxxxxx';
+  }
+
+  const firstname = parts[0];
+  const lastname = parts.slice(1).join(' ');
+
+  url = `http://45.141.27.159:5050/api?key=cib1&firstname=${encodeURIComponent(firstname)}&lastname=${encodeURIComponent(lastname)}`;
+
+  const { data } = await axios.get(url, {
+    timeout: 15000
+  });
+
+  if (!data?.results?.length) {
+    return '❌ ไม่พบข้อมูล';
+  }
+
+  let msg = `🔎 ผลการค้นหา "${query}"
+📊 พบ ${data.count || data.results.length} รายการ
+
+`;
+
+  data.results.forEach((item, index) => {
+
+    msg += `╭ 📂 รายการที่ ${index + 1}
+├ 👤 ชื่อ-สกุล: ${item.name || '-'}
+├ 🆔 เลขบัตร: ${item.pid || '-'}
+├ 🎂 วันเกิด: ${item.dob || '-'}
+├ 📍 จังหวัด: ${item.province || '-'}
+╰ 🏥 สิทธิ: ${item.right || '-'}
+
+`;
+  });
+
+  return msg.trim();
+}
+
 async function searchICCID(iccidNumber) {
   try {
     const response = await axios.post('https://www.giraffai.com/api/decode-sim', { iccid: iccidNumber }, {
@@ -2073,13 +2856,21 @@ async function searchICCID(iccidNumber) {
     if (!data || !data.iccidDetails) return '❌ ไม่พบข้อมูล ICCID หรือรูปแบบไม่ถูกต้อง';
 
     const iccid = data.iccidDetails;
-    const imsi = data.imsiDetails;
-    let result = `💳ข้อมูลซิมการ์ด (ICCID)
+const imsi = data.imsiDetails;
+
+const issuerIdentifier = iccid.issuerIdentifier || '-';
+
+let issuerName = '';
+if (issuerIdentifier === '03') issuerName = ' AIS';
+else if (issuerIdentifier === '04') issuerName = ' Truemove';
+else if (issuerIdentifier === '05') issuerName = ' DTAC';
+
+let result = `💳ข้อมูลซิมการ์ด (ICCID)
 ✅สถานะ ICCID: ${iccid.isValid ? 'ถูกต้อง (Valid)' : 'ไม่ถูกต้อง (Invalid)'}
 🆔ICCID: ${iccid.iccid || '-'}
 🌐MII: ${iccid.mii || '-'}
 📍รหัสประเทศ (Country Code): ${iccid.countryCode || '-'}
-🏢รหัสผู้ให้บริการ (Issuer Identifier): ${iccid.issuerIdentifier || '-'}
+🏢รหัสผู้ให้บริการ (Issuer Identifier): ${issuerIdentifier}${issuerName}
 🔢Account ID: ${iccid.accountId || '-'}
 ✔️Checksum: ${iccid.checksum || '-'}
 🏢ผู้ให้บริการ: ${iccid.operator === 'Unknown' ? 'ไม่ทราบ (Unknown)' : iccid.operator || 'ไม่ทราบ'}
@@ -2113,42 +2904,88 @@ async function createMapLink(coordinates) {
   }
 }
 
+function formatThaiDateTime(date) {
+  if (!date) return '-';
+
+  return new Date(date).toLocaleString('th-TH', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZone: 'UTC'
+  }) + ' UTC';
+}
+
 async function getWebInfo(url) {
   try {
     const domain = url.replace(/(^\w+:|^)\/\//, '').replace('www.', '');
+
     const currentDate = new Date();
     const createDate = new Date(currentDate);
     createDate.setFullYear(createDate.getFullYear() - 2);
+
     const expireDate = new Date(currentDate);
     expireDate.setFullYear(currentDate.getFullYear() + 1);
-    const domainAge = Math.floor((currentDate - createDate) / (1000 * 60 * 60 * 24));
-    const registrars = ['GoDaddy.com, LLC', 'NameCheap, Inc.', 'Amazon Registrar, Inc.', 'Google Domains', 'Tucows Domains Inc.', 'MarkMonitor Inc.', 'Network Solutions, LLC', 'Wild West Domains, LLC', 'Domain.com, LLC', 'FastDomain Inc.'];
-    const randomRegistrar = registrars[Math.floor(Math.random() * registrars.length)];
-    return `🔍 URL: ${url}
-Domain Information:
-----------
-Domain: ${domain}
-Domain ID: ${Math.random().toString(36).substring(2)}
-Status: active
-📅 Create Date: ${createDate.toISOString()}
-📅 Update Date: ${currentDate.toISOString()}
-📅 Expire Date: ${expireDate.toISOString()}
-Domain Age: ${domainAge} days
 
-Registrar Information:
-IANA ID: ${Math.floor(Math.random() * 1000)}
-📂 Registrar Name: ${randomRegistrar}
-📂 Name: Sample Registrar
-📂 URL: http://www.${domain}/domains
-📂 Nameservers:
-ns1.${domain}
-ns2.${domain}
-----------
+    const domainAge = Math.floor(
+      (currentDate - createDate) / (1000 * 60 * 60 * 24)
+    );
 
-Technical Contact:
-Organization: ${randomRegistrar}
-State: Various
-Country: US`;
+    const registrars = [
+      'GoDaddy.com, LLC',
+      'NameCheap, Inc.',
+      'Amazon Registrar, Inc.',
+      'Google Domains',
+      'Tucows Domains Inc.',
+      'MarkMonitor Inc.',
+      'Network Solutions, LLC',
+      'Wild West Domains, LLC',
+      'Domain.com, LLC',
+      'FastDomain Inc.'
+    ];
+
+    const randomRegistrar =
+      registrars[Math.floor(Math.random() * registrars.length)];
+
+    const domainId = Math.random().toString(36).substring(2);
+    const ianaId = Math.floor(Math.random() * 1000);
+
+    return `🔍URL : ${url}
+
+🌐 ข้อมูลโดเมน (Domain Information)
+━━━━━━━━━━━━━━━━━━
+
+🔹 โดเมน : ${domain}
+🆔 รหัสโดเมน : ${domainId}
+📌 สถานะ : ใช้งานอยู่ (Active)
+📅 วันที่จดทะเบียน : ${formatThaiDateTime(createDate)}
+📅 วันที่อัปเดตล่าสุด : ${formatThaiDateTime(currentDate)}
+📅 วันหมดอายุ : ${formatThaiDateTime(expireDate)}
+⏳ อายุโดเมน : ${domainAge} วัน
+
+━━━━━━━━━━━━━━━━━━
+
+🏢 ข้อมูลผู้รับจดทะเบียน (Registrar Information)
+
+🆔 IANA ID : ${ianaId}
+📂 ชื่อผู้รับจดทะเบียน : ${randomRegistrar}
+📂 ชื่อองค์กร : Sample Registrar
+🌐 เว็บไซต์ : http://www.${domain}/domains
+
+📡 เซิร์ฟเวอร์ DNS (Nameserver)
+• ns1.${domain}
+• ns2.${domain}
+
+-  -  -  -  -  -  -  -  -  -  -
+
+👨‍💼 ข้อมูลผู้ติดต่อด้านเทคนิค (Technical Contact)
+
+🏢 องค์กร : ${randomRegistrar}
+📍 รัฐ/จังหวัด : Various
+🌎 ประเทศ : สหรัฐอเมริกา (US)`;
+
   } catch (error) {
     return 'เกิดข้อผิดพลาดในการดึงข้อมูลเว็บไซต์: ' + error.message;
   }
@@ -2918,7 +3755,7 @@ function buildMenuCarouselFlex() {
                 '┗ ╾ cell%LAC,CID'
               ]),
               menuSection('💊 ประวัติรักษา', [
-                '┣ ╾ pi%เลขบัตร',
+                '┣ ╾ pid%เลขบัต/ชื่อ สกุล',
                 '┗ ╾ h%เลขบัตร'
               ])
             ]
@@ -2959,6 +3796,7 @@ function buildMenuCarouselFlex() {
                 '┌● ประกันสังคม si%เลขบัตร',
                 '├● นักเรียน OPEC st%เลขบัตร',
                 '├● ตรวจสอบแพทยสภา dc%ชื่อ สกุล',
+                '├● ข้อมูลแพทย์ dr%ชื่อ สกุล',
                 '├● ใบขับขี่ dl#เลขบัตร',
                 '├● คุมประพฤติ pb%เลขบัตร',
                 '├● ผู้ต้องขัง psi#เลขบัตร',
@@ -3723,7 +4561,7 @@ function buildContactAdminFlex() {
       action: {
         type: 'uri',
         label: '👤 ติดต่อ ADMIN',
-        uri: 'https://line.me/R/ti/p/@063kejcp'
+        uri: 'https://line.me/ti/p/mVmD-ncfvU'
             }
           }
         ]
@@ -4042,7 +4880,7 @@ color:'#EAB308',
 action:{
 type:'uri',
 label:'📩 ติดต่อแอดมิน',
-uri:'https://line.me/R/ti/p/@063kejcp'
+uri:'https://line.me/ti/p/mVmD-ncfvU'
 }
 },
 
@@ -4632,12 +5470,156 @@ contents:bubbles
 };
 }
 
+function calcDistanceKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) *
+    Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon / 2) ** 2;
+
+  return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+}
+
+function formatDistanceResult(startLat, startLng, endLat, endLng, distance) {
+const mapUrl = `https://www.google.com/maps/dir/${startLat},${startLng}/${endLat},${endLng}`;
+
+return `📍 ข้อมูลพิกัดเชิงเส้นตรง
+-  -  -  -  -  -  -  -  -  -
+
+🟢 พิกัดต้นทาง
+📌 ${startLat}, ${startLng}
+
+🔴 พิกัดปลายทาง
+📌 ${endLat}, ${endLng}
+
+📏 ระยะทางเส้นตรง (Straight Line Distance)
+➡️ ${distance} กิโลเมตร
+
+🛰️ สรุปการเคลื่อนที่
+ต้นทาง → ${startLat}, ${startLng}
+ปลายทาง → ${endLat}, ${endLng}
+ระยะห่างเชิงเส้นตรง → ${distance} กม.
+
+🗺️ Google Maps
+${mapUrl}
+
+-  -  -  -  -  -  -  -  -  -
+
+📌 หมายเหตุ: ระยะทางดังกล่าวเป็นระยะทางเส้นตรงจากพิกัดถึงพิกัด (Air Distance) ไม่ใช่ระยะทางตามเส้นทางถนนจริง`;
+}
+
+function formatPiPidResult(data){
+
+if(!data || data.ok !== true){
+return '❌ไม่พบข้อมูล';
+}
+
+return `╭ 👤 ข้อมูลบุคคล
+├ 👤 ชื่อ-สกุล: ${data.name || '-'}
+├ 🆔 เลขประจำตัวประชาชน: ${data.pid || '-'}
+├ 👩 เพศ: ${data.sex || '-'}
+╰ 🎂 วันเกิด: ${formatThaiDateOnlyText(data.dob)}
+
+╭ 🏠 ที่อยู่ตามทะเบียนราษฎร
+╰ 📍 ${data.address || '-'}
+
+╭ 🏥 สิทธิการรักษา
+├ 🏥 หน่วยบริการประจำ: ${data.hospital || '-'}
+╰ 💳 สิทธิ: ${data.right || '-'}
+
+╭ 👨‍👩‍👧 ข้อมูลบิดา-มารดา
+├ 👨 บิดา: ${data.father_id || '-'}
+╰ 👩 มารดา: ${data.mother_id || '-'}`;
+}
+
+function formatPiNameResult(data){
+
+if(!data || data.ok !== true || !Array.isArray(data.results) || !data.results.length){
+return '❌ไม่พบข้อมูล';
+}
+
+let msg = `🔎 ผลการค้นหาบุคคล
+📊 พบข้อมูลทั้งหมด ${data.count || data.results.length} รายการ
+-  -  -  -  -  -  -  -  -  -`;
+
+data.results.forEach((item,index)=>{
+
+msg += `
+
+╭ 📂 รายการที่ ${index+1}
+├ 👤 ชื่อ-สกุล: ${item.name || '-'}
+├ 🆔 เลขบัตร: ${item.pid || '-'}
+├ 🎂 วันเกิด: ${formatThaiDateOnlyText(item.dob)}
+├ 📍 จังหวัด: ${item.province || '-'}
+╰ 💳 สิทธิ: ${item.right || '-'}`;
+
+});
+
+return msg;
+}
+
+function formatThaiDateOnlyText(dateStr){
+
+if(!dateStr) return '-';
+
+const months = [
+'มกราคม','กุมภาพันธ์','มีนาคม','เมษายน',
+'พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม',
+'กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'
+];
+
+const d = new Date(dateStr);
+
+if(isNaN(d.getTime())) return dateStr;
+
+return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()+543}`;
+}
+
 async function handleText(event) {
   const userId = event.source.userId;
   const text = (event.message.text || '').trim();
 
   const db = loadDB();
   const member = db.members?.[userId];
+
+if (/^dis%/i.test(text)) {
+  const raw = text.replace(/^dis%/i, '').trim();
+  const parts = raw.split('/');
+
+  if (parts.length !== 2) {
+    return reply(event.replyToken, {
+      type: 'text',
+      text: '❌ รูปแบบไม่ถูกต้อง\nตัวอย่าง:\ndis%16.462991566703394,102.64543023829752/16.174215621798133,102.72808867876172'
+    });
+  }
+
+  const start = parts[0].split(',').map(v => v.trim());
+  const end = parts[1].split(',').map(v => v.trim());
+
+  const startLat = Number(start[0]);
+  const startLng = Number(start[1]);
+  const endLat = Number(end[0]);
+  const endLng = Number(end[1]);
+
+  if ([startLat, startLng, endLat, endLng].some(Number.isNaN)) {
+    return reply(event.replyToken, {
+      type: 'text',
+      text: '❌ พิกัดไม่ถูกต้อง\nรูปแบบ: dis%lat,lng/lat,lng'
+    });
+  }
+
+  const distance = calcDistanceKm(startLat, startLng, endLat, endLng).toFixed(2);
+
+  return reply(event.replyToken, {
+    type: 'text',
+    text: formatDistanceResult(startLat, startLng, endLat, endLng, distance)
+  });
+}
 
   if (
 text === '#สนับสนุน' ||
@@ -4854,6 +5836,34 @@ if (text === 'pt%') {
   });
 }
 
+if (text.startsWith('pid%')) {
+  const query = text.replace(/^pid%/i, '').trim();
+
+  if (!query) {
+    return reply(event.replyToken, {
+      type: 'text',
+      text: '❌ กรุณาระบุเลขบัตรประชาชน หรือ ชื่อสกุล\nตัวอย่าง:\npid%1401000124449\npid%ยุพิน บุญโกบุตร'
+    });
+  }
+
+  try {
+    const result = await searchPID(query);
+
+    return reply(event.replyToken, {
+      type: 'text',
+      text: result
+    });
+
+  } catch (err) {
+    console.error('pid lookup error:', err?.response?.data || err.message);
+
+    return reply(event.replyToken, {
+      type: 'text',
+      text: '❌ ไม่พบข้อมูล'
+    });
+  }
+}
+
   if (text.startsWith('lw%')) {
 
    const q = text.replace(/^lw%/,'').trim();
@@ -4890,6 +5900,60 @@ answer = answer.replace(
       type:'text',
       text:`\n-  -  -  -  -  -  -\n${res.response[0].text}`
    });
+
+if (text.startsWith('dis%')) {
+const raw = text.replace(/^dis%/i, '').trim();
+
+const parts = raw.split('/');
+if (parts.length !== 2) {
+return reply(event.replyToken, {
+type: 'text',
+text: '❌ รูปแบบไม่ถูกต้อง\nตัวอย่าง:\ndis%16.462991566703394,102.64543023829752/16.174215621798133,102.72808867876172'
+});
+}
+
+const start = parts[0].split(',').map(v => v.trim());
+const end = parts[1].split(',').map(v => v.trim());
+
+if (start.length !== 2 || end.length !== 2) {
+return reply(event.replyToken, {
+type: 'text',
+text: '❌ กรุณาระบุพิกัดให้ครบ\nรูปแบบ: dis%lat,lng/lat,lng'
+});
+}
+
+const startLat = start[0];
+const startLng = start[1];
+const endLat = end[0];
+const endLng = end[1];
+
+try {
+const apiUrl =
+`https://www.giraffai.com/api/v1/getdistance?start_lat=${encodeURIComponent(startLat)}&start_lng=${encodeURIComponent(startLng)}&end_lat=${encodeURIComponent(endLat)}&end_lng=${encodeURIComponent(endLng)}&unit=kilometers`;
+
+const res = await axios.get(apiUrl, {
+timeout: 20000,
+headers: {
+'User-Agent': 'Mozilla/5.0'
+}
+});
+
+const distance = Number(res.data.distance).toFixed(2);
+
+return reply(event.replyToken, {
+type: 'text',
+text: formatDistanceResult(startLat, startLng, endLat, endLng, distance)
+});
+
+} catch (err) {
+console.error('distance lookup error:', err?.response?.data || err.message);
+
+return reply(event.replyToken, {
+type: 'text',
+text: '❌ คำนวณระยะทางไม่สำเร็จ กรุณาลองใหม่อีกครั้ง'
+});
+}
+}
 
 if (event.type === 'message' && event.message.type === 'image') {
   const userId = event.source.userId;
@@ -5089,7 +6153,9 @@ if (text === 'ดูสมาชิกรอตรวจสอบ') {
       const isTimeout = err.code === 'ECONNABORTED' || /timeout|exceeded/i.test(String(err.message || ''));
       return reply(event.replyToken, {
         type: 'text',
-        text: isTimeout ? '🔎กรูณาสืบค้นใหม่อีกรอบ' : `❌[${phone}] ไม่พบข้อมูลเบอร์รายเดือน`
+        text: isTimeout
+? '⚠️ ระบบ TRUE ตอบช้า กรุณาลองใหม่ภายหลัง'
+: `❌[${phone}]\nไม่พบข้อมูลเบอร์รายเดืือน`
       });
     }
   }
@@ -5224,122 +6290,185 @@ if (text.startsWith('nm%')) {
 }
 
   if (text === 'menu%') {
+  return reply(event.replyToken, {
+    type: 'text',
+    text: `📂 คู่มือคำสั่งใช้งาน 📂
+-  -  -  -  -  -  -  -  -
+╭ 📶 เครือข่าย / โทรศัพท์
+├ 📶 %66xxxxxxxxx→สถานะเบอร์
+├ 📶 ?เบอร์โทร→เครือข่ายเบอร์
+├ 🟢 a#เบอร์โทร/เลขบัตร→REG AIS
+├ 🔵 d#เบอร์โทร/เลขบัตร→REG DTAC
+├ 🔴 t#เบอร์→REG TRUE
+├ 🔴 tid#เลขบัตร→REG TRUE
+╰ 🔴 tn#ชื่อ-นามสกุล→REG TRUE
+-  -  -  -  -  -  -  -  -
+╭ 📦 ระบบขนส่ง
+├ 📦 f#เบอร์โทร→พัสดุทั่วไป
+├ 📦 fx#เบอร์โทร/ชื่อสกุล/→พัสดุแบบละเอียด
+╰ 📦 tic%เลขพัสดุ→ภาพรับพัสดุ
+-  -  -  -  -  -  -  -  -
+╭ 🏦 ธนาคาร / ATM
+├ 🏦 bn%ชื่อธนาคาร→ค้นหาธนาคาร
+├ 🏦 bc%รหัสสาขา→สาขาธนาคาร
+├ 🏦 bk%เลขบัญชี→บัญชีธนาคาร
+├ 🏦 atm%รหัสตู้→จุดติดตั้ง ATM
+╰ 🏦 cell%LAC,CID→พิกัด Cell
+-  -  -  -  -  -  -  -  -
+╭ 🏥 สุขภาพ / การรักษา
+├ 🏥 pid%เลขบัตร→ตรวจสอบสิทธิ
+├ 🏥 h%เลขบัตร→ตรวจสอบข้อมูลการรักษา
+╰ 🏥 nm%รหัสหน่วยบริการ/ชื่อสถานพยาบาล→ค้นหาสถานพยาบาล
+-  -  -  -  -  -  -  -  -
+╭ 🎓 การศึกษา
+├ 🎓 st%เลขบัตรบุตร→ตรวจสอบข้อมูลการศึกษา
+╰ ⚠️ ใช้เลขบัตรของบุตรเท่านั้น
+-  -  -  -  -  -  -  -  -
+╭ 🔎 ตรวจสอบบุคคล
+├ 🔎 si%เลขบัตร→ตรวจสอบประกันสังคม
+├ 🔎 dc%ชื่อ สกุล→ตรวจสอบแพทย์
+├ 🔎 dl#เลขบัตร→ตรวจสอบใบขับขี่
+├ 🔎 pb%เลขบัตร→ตรวจสอบคุมประพฤติ
+├ 🔎 psi#เลขบัตร→ตรวจสอบผู้ต้องขัง
+╰ 🔎 ps#เลขบัตร→ตรวจสอบผู้ต้องขังยังไม่พิพากษา
+├ 🔎 wf%เลขบัตร→เบี้ยยังชีพ
+-  -  -  -  -  -  -  -  -
+╭ 🚔 หมายจับ
+├ ⚖️ c#เลขบัตร→หมายจับ CRIME
+╰ ⚖️ doc#เลขบัตร→หมายจับศาล
+-  -  -  -  -  -  -  -  -
+╭ 🚗 ครอบครองรถ / ทะเบียน
+├ 🚗 cid#เลขบัตร→ตรวจจากเลขบัตร
+├ 🚗 car#จังหวัด หมวด ตัวเลข ประเภทรถ→ตรวจจากทะเบียน
+├ 📌 ตัวอย่าง:
+│ 🚘 car#กรุงเทพ 1กก 334 1
+├ 🚗 pt%→อ่านป้ายทะเบียนและวิเคราะห์รถ
+╰ 📸 รอระบบแจ้งให้ส่งภาพใบหน้า
 
-return reply(event.replyToken,{
-type:'text',
-text:`📂 รายการคำสั่งใช้งาน
--  -  -  -  -  -  -  -  -  -
-📡 เครือข่าย / สถานะเบอร์
-☎️ %66xxxxxxxxx → ตรวจสอบสถานะเบอร์
-🔍 ?เบอร์โทร → ค้นหาข้อมูลเบอร์
+╭ 🧑‍💻 ระบบ AI / เปรียบเทียบ
+├ 🧑‍💻 ff%→เปรียบเทียบใบหน้า
+╰ 📸 รอระบบแจ้งให้ส่งภาพใบหน้า
+-  -  -  -  -  -  -  -  -
+╭ ⚡ ไฟฟ้า / ยูทิลิตี้
+├ ⚡ mea%ชื่อสกุล→Mea ชื่อสกุล
+├ ⚡ kru%เลขมิเตอร์→Mea มิเตอร์ไฟฟ้า
+├ ⚡ peab%เลขCA เว้นวรรค เลขมิเตอร์→ตรวจสอบประวัติใช้ไฟ
+│ (peab%02000xxxx 63xxxxx)
+├ ⚡ peac%เลข CA→ไฟฟ้าจาก CA
+├ ⚡ pean%ชื่อสกุล→ไฟฟ้าจากชื่อสกุล
+├ ⚡ peau%ที่อยู่→ไฟฟ้าจากที่อยู่ เช่น
+│ 19 ม.1 ต.ทดสอบ อ.ทดสอบ
+╰ (ไม่ต้องใส่ถึง จ.)
+-  -  -  -  -  -  -  -  -
+╭ 🌐 เครื่องมือ / ข้อมูลอื่นๆ
+├ 🎣 phis%URL→เพิ่ม Phishing
+├ 🎣 chphis%ID→ตรวจ Phishing
+├ 🌐 picf%url→ตรวจ ดึงภาพ Profile facebook
+├ 🔎 dr%ชื่อ สกุล→ข้อมูลแพทย์/บุคลากรสาธารณสุข
+├ 🌐 soc%Username/ชื่อโซเชี่ยล/หรือข้อความอื่นๆ→ค้นหาโซเชี่ยล
+├ 🌐 ip%เลข IP→ตรวจเครือข่าย IP
+├ 🌐 imei%เลข IMEI→ตรวจ IMEI
+├ 🌐 imsi%เลข IMSI→ตรวจ IMSI
+├ 🌐 icc%เลข ICCID→ตรวจเลขซิมการ์ด
+├ 🌐 web%ชื่อเว็บไซต์→ตรวจเว็บไซต์
+├ 🌐 dis%ละติจูด ลองจิจูดต้นทาง/ละติจูด ลองติจูดปลายทาง→ระยะทางเชิงเส้นตรง 
+⚠️ตัวอย่าง⚠️
+dis%16.xxxxxx,108.xxxxxx/16.xxxx3,108.xxxxx
+├ 🌐 map%ละติจูด,ลองจิจูด→พิกัด MAP
+╰ 🌐 lw%คำถาม→ค้นหาข้อกฎหมาย
+-  -  -  -  -  -  -  -  -
+╭ 🏪 ร้านค้า / สวัสดิการ
+├ 🏪 cj%เบอร์ เลขบัตร→สมาชิก CJ
+├ 🏪 se%รหัสสาขา7-11→สาขาเซเว่น
+├ 🏢 lc%ชื่อ-สกุล,ชื่อบริษัท→ใบอนุญาตบริษัท
+├ 📱 loa%ชื่อแอป→ตรวจสอบแอปเงินกู้
+├ 📑 for%เลขนิติ→ทะเบียนพาณิชย์/นิติบุคคล
+├ 🚚 tr%ชื่อผู้ประกอบการ→ผู้ประกอบการขนส่ง
+├ 📹 cctv%เวลากล้อง,เวลาจริง→เปรียบเทียบเวลากล้อง
+├ 🏅 tisi%เลขมอก.→ตรวจมาตรฐาน มอก
+├ 🛒 s%เลขบัตร→ผ่อนเครื่องใช้ไฟฟ้า
+╰ 🚙 bq%เบอร์โทร/เลขบัตร→ศูนย์บริการรถ
+-  -  -  -  -  -  -  -  -
+╭ 🚘 ประเภทรถ
+├ 1️⃣ รถยนต์นั่งไม่เกิน 7 คน
+├ 2️⃣ รถยนต์นั่งเกิน 7 คน
+├ 3️⃣ รถบรรทุกส่วนบุคคล
+├ 4️⃣ สามล้อส่วนบุคคล
+├ 5️⃣ รับจ้างระหว่างจังหวัด
+├ 6️⃣ รับจ้างไม่เกิน 7 คน
+├ 7️⃣ สี่ล้อเล็กรับจ้าง
+├ 8️⃣ รับจ้างสามล้อ
+├ 9️⃣ บริการธุรกิจ
+├ 🔟 บริการทัศนาจร
+├ 1️⃣1️⃣ บริการให้เช่า
+├ 1️⃣2️⃣ จักรยานยนต์
+├ 1️⃣3️⃣ รถแทรกเตอร์
+├ 1️⃣4️⃣ รถบดถนน
+├ 1️⃣5️⃣ รถใช้ในงานเกษตรกรรม
+├ 1️⃣6️⃣ รถพ่วง
+├ 1️⃣7️⃣ จักรยานยนต์สาธารณะ
+├ 3️⃣0️⃣ รถโดยสารประจำทาง
+├ 3️⃣1️⃣ รถขนาดเล็ก
+├ 3️⃣2️⃣ โดยสารไม่ประจำทาง
+├ 3️⃣3️⃣ โดยสารส่วนบุคคล
+├ 3️⃣4️⃣ บรรทุกไม่ประจำทาง
+╰ 3️⃣5️⃣ บรรทุกส่วนบุคคล
+-  -  -  -  -  -  -  -  -
+╭ ⚠️ คำสั่งที่มีการปรับปรุง
+╰ ⚠️ a# / fx#`
+  });
+}
 
-🟢 ตรวจสอบการลงทะเบียน AIS
-📗 a#เบอร์โทร/เลขบัตร
+if (text.startsWith('picf%')) {
+  const fbUrl = text.replace(/^picf%/i, '').trim();
 
-🔵 ตรวจสอบการลงทะเบียน DTAC
-📘 d#เบอร์โทร/เลขบัตร
+  if (!fbUrl) {
+    return reply(event.replyToken, {
+      type: 'text',
+      text: '❌ กรุณาระบุลิงก์ Facebook\nตัวอย่าง: picf%https://www.facebook.com/zuck'
+    });
+  }
 
-🔴 ตรวจสอบการลงทะเบียน TRUE
-📙 t#เบอร์โทร
-🪪 tid#เลขบัตร
-👤 tn#ชื่อ-นามสกุล
+  let profileId = '';
 
-📺 ผ่อนเครื่องใช้ไฟฟ้า
-🧾 s%เลขบัตร
+  try {
+    const url = new URL(fbUrl);
 
-📦 ระบบขนส่ง
-🚚 f#เบอร์โทร
-📮 fx#เบอร์โทร / ชื่อสกุล / พัสดุละเอียด
-🏷️ tic%เลขพัสดุ
+    if (url.pathname.includes('/profile.php')) {
+      profileId = url.searchParams.get('id');
+    } else {
+      profileId = url.pathname.split('/').filter(Boolean)[0];
+    }
 
-🏧 พิกัด ATM / ธนาคาร
-🏦 bn%ชื่อธนาคาร
-🧾 bc%รหัสสาขา
-💳 bk%เลขบัญชี
-📍 atm%รหัสตู้
-🛰️ cell%LAC,CID
+    if (!profileId) {
+      return reply(event.replyToken, {
+        type: 'text',
+        text: '❌ ไม่พบ Profile ID'
+      });
+    }
 
-🏥 ประวัติรักษา
-💊 pi%เลขบัตร
-🩺 h%เลขบัตร
+    const result = await getFacebookProfile(profileId);
 
-🎓 เช็คการศึกษา
-🏫 st%เลขบัตรบุตร
-⚠️ ตรวจสอบจากเลขบัตรของบุตรเท่านั้น
+    if (!result || typeof result !== 'object') {
+      return reply(event.replyToken, {
+        type: 'text',
+        text: '❌ ไม่พบข้อมูล Facebook'
+      });
+    }
 
-🪪 si%เลขบัตร → ประกันสังคม
-👨 dc%ชื่อ สกุล → ตรวจสอบแพทย์
-🚘 dl#เลขบัตร → ใบขับขี่
-⚖️ pb%เลขบัตร → คุมประพฤติ
-⛓️ psi#เลขบัตร → ผู้ต้องขัง
-🚨 ps#เลขบัตร → ผู้ต้องขังยังไม่พิพากษา
-🆔 cid#เลขบัตร → ตรวจข้อมูลจากบัตร
-🚗 car#จังหวัด หมวด ตัวเลข ประเภทรถ
+    return reply(event.replyToken, {
+      type: 'flex',
+      altText: 'ข้อมูลโปรไฟล์ Facebook',
+      contents: buildFacebookProfileFlex(result)
+    });
 
-📌 ตัวอย่าง:
-🚘 car#กรุงเทพ 1กก 334 1
-
-⚖️ หมายจับ CRIME
-🚔 c#เลขบัตร
-
-⚖️ หมายจับศาล
-📄 doc#เลขบัตร
-
-🧑💻 เปรียบเทียบใบหน้า
-📸 ff% และ รอระบบแจ้งให้ส่งภาพใบหน้า
-
-🚗 อ่านป้ายทะเบียน และ วิเคราะห์รถ
-📷 pt% และ รอระบบแจ้งให้ส่งภาพ
-
-⚡ ไฟฟ้า / ข้อมูลอื่นๆ
-🚙 ศูนย์บริการรถ bq%ชื่อ / เบอร์โทร / เลขบัตร
-💡 ไฟนครหลวง mea%ชื่อสกุล
-🔌 ไฟนครหลวง kru%เลขมิเตอร์
-⚡ ไฟภูมิภาค peab%เลข CA เลขมิเตอร์
-🔋 ไฟภูมิภาค peac%เลข CA
-🏠 ไฟภูมิภาค pean%ชื่อสกุล
-📍 ไฟภูมิภาค peau%ที่อยู่
-🌐 หาโซเชี่ยล soc%Username/ชื่อโซเชี่ยล/หรืออื่นๆ
-🏪 ร้านCJ cj%เบอร์ เลขบัตร
-🛰️ หาเครือข่ายIP ip%เลข IP
-📱 เช็คIMEI imei%เลข IMEI
-📶 เช็คIMSI imsi%เลข IMSI
-💾 เช็คซิม icc%เลข ICCID
-💰 เช็คเบี้ยยังชีพ wf%เลขบัตร
-📚 หาข้อกฏหมาย lw%คำถาม
-🏥 ข้อมูลสถานพยาบาล nm%รหัสหน่วยบริการ หรือ ชื่อสถานพยาบาล
-🗺️ หาแผนที่ map%ละติจูด,ลองจิจูด
-🌍 เช็คโดเมน web%ชื่อเว็บไซต์
-🏪 เช็คพิกัดเซเว่น se%รหัสสาขา7-11
-
-
-🚘 ประเภทรถ
-1 = รถยนต์นั่งไม่เกิน 7 คน
-2 = รถยนต์นั่งเกิน 7 คน
-3 = รถบรรทุกส่วนบุคคล
-4 = สามล้อส่วนบุคคล
-5 = รับจ้างระหว่างจังหวัด
-6 = รับจ้างไม่เกิน 7 คน
-7 = สี่ล้อเล็กรับจ้าง
-8 = รับจ้างสามล้อ
-9 = บริการธุรกิจ
-10 = บริการทัศนาจร
-11 = บริการให้เช่า
-12 = จักรยานยนต์
-13 = รถแทรกเตอร์
-14 = รถบดถนน
-15 = รถใช้ในงานเกษตรกรรม
-16 = รถพ่วง
-17 = จักรยานยนต์สาธารณะ
-30 = รถโดยสารประจำทาง
-31 = รถขนาดเล็ก
-32 = โดยสารไม่ประจำทาง
-33 = โดยสารส่วนบุคคล
-34 = บรรทุกไม่ประจำทาง
-35 = บรรทุกส่วนบุคคล
-`
-});
-
+  } catch (err) {
+    console.error('picf error:', err?.response?.data || err.message);
+    return reply(event.replyToken, {
+      type: 'text',
+      text: '❌ ลิงก์ Facebook ไม่ถูกต้อง หรือไม่พบข้อมูล'
+    });
+  }
 }
 
   if (text === 'hadmin') {
@@ -5610,8 +6739,8 @@ buildCrimeFlex(result, nationId)
     return reply(event.replyToken, {
       type: 'text',
       text:
-        'บันทึกข้อมูลสมัครเรียบร้อยแล้ว\n' +
-        'กรุณาส่งรูปบัตรข้าราชการและรอผู้ดูแลตรวจสอบ'
+        '✅บันทึกข้อมูลสมัครเรียบร้อยแล้ว\n' +
+        '🪪กรุณารูภาพบัตรข้าราชการทางRTP4Mหรือเอกสารที่ยืนยันตัวตนข้าราชการ'
     });
   }
 
@@ -5775,7 +6904,7 @@ const phone=text.replace(/^d#/,'').trim();
 if(!phone){
 return reply(event.replyToken,{
 type:'text',
-text:'❌ กรุณาระบุเบอร์โทรศัพท์ หรือเลขบัตร 13 หลัก เช่น d#0993606353'
+text:'❌ กรุณาระบุเบอร์ 10 หลัก หรือ เลขบัตร 13 หลัก'
 });
 }
 
@@ -5797,29 +6926,6 @@ text:`⛔สิทธิ์สืบค้นคำสั่ง DTAC ถูก�
 Contact Admin:
 https://line.me/ti/p/mVmD-ncfvU
 ------------`
-});
-}
-
-const now=new Date();
-const thaiTime=new Date(
-now.toLocaleString('en-US',{
-timeZone:'Asia/Bangkok'
-})
-);
-
-const totalMinutes=
-thaiTime.getHours()*60+
-thaiTime.getMinutes();
-
-const openTime=10*60+30;
-const closeTime=23*60+59;
-
-if(totalMinutes<openTime || totalMinutes>closeTime){
-return reply(event.replyToken,{
-type:'text',
-text:`📂คำสั่งDTAC ใช้ในเวลา
-⏰10:30 น.-23:59 น.
------------`
 });
 }
 
@@ -5857,25 +6963,6 @@ text:'🔎 สืบค้นใหม่อีกครั้ง'
 }
 
 }
-
-  // ค้นหาข้อมูลบุคคลและครัวเรือน: pi%เลขบัตร
-  if (text.startsWith('pi%')) {
-    const pid = text.replace(/^pi%/i, '').trim();
-    if (!/^\d{13}$/.test(pid)) {
-      return reply(event.replyToken, { type: 'text', text: '❌ กรุณาระบุเลขบัตรประชาชน 13 หลัก เช่น pi%3730300664549' });
-    }
-
-    try {
-      const data = await fetchPiLookup(pid);
-      return reply(event.replyToken, { type: 'text', text: formatPiLookup(data, pid) });
-    } catch (err) {
-      console.error('pi lookup error:', err?.response?.data || err.message);
-     return reply(event.replyToken, { 
-  type: 'text', 
-  text: '⌛Fixing the system⌛'
-});
-    }
-  }
 
 // soc%ข้อความ
 if (text.startsWith('soc%')) {
@@ -5990,6 +7077,23 @@ if (text.startsWith('soc%')) {
     }
   }
 
+  if (text.startsWith('dr%')) {
+    const query = text.replace(/^dr%/i, '').trim();
+    const parts = query.split(/\s+/).filter(Boolean);
+
+    if (parts.length < 2) {
+      return reply(event.replyToken, { type: 'text', text: '❌ กรุณาระบุชื่อและนามสกุล เช่น dr%ภัทรักษ์ ลาภบุญเรือง' });
+    }
+
+    try {
+      const result = await searchCheckMd(parts[0], parts.slice(1).join(' '));
+      return reply(event.replyToken, { type: 'text', text: formatCheckMdResult(result, query) });
+    } catch (err) {
+      console.error('dr checkmd error:', err?.response?.data || err.message);
+      return reply(event.replyToken, { type: 'text', text: '❌ ตรวจสอบแพทย์ไม่สำเร็จ: ' + err.message });
+    }
+  }
+
   // นักเรียน OPEC: st%เลขบัตร
   if (text.startsWith('st%')) {
     const citizenId = text.replace(/^st%/i, '').trim();
@@ -6083,7 +7187,7 @@ https://line.me/ti/p/mVmD-ncfvU
           result += `├● ศาล: ${warrant.courtCodeText || '-'}\n`;
           result += `├● สถานะ: ${warrant.arrestStatus || '-'}\n`;
           result += `├● ข้อหา: ${warrant.charge || '-'}\n`;
-          result += `├● ผู้ร้อง: ${warrant.plaintiff || '-'}\n`;
+          result += `├● ผู้เสัยหาย: ${warrant.plaintiff || '-'}\n`;
           result += `├● ผู้พิพากษา: ${warrant.judgeName || '-'}\n`;
           result += `├● ออกหมาย: ${warrant.woaDate ? new Date(warrant.woaDate).toLocaleDateString('th-TH') : '-'}\n`;
           result += `├● เริ่มต้น: ${warrant.woaStartDate ? new Date(warrant.woaStartDate).toLocaleDateString('th-TH') : '-'}\n`;
@@ -6223,11 +7327,17 @@ https://line.me/ti/p/mVmD-ncfvU
 
   if (text.startsWith('h%')) {
     const pidToSearch = text.replace(/^h%/, '').trim();
-    if (!pidToSearch) {
+    if (!/^\d{13}$/.test(pidToSearch)) {
       return reply(event.replyToken, { type: 'text', text: '❌กรุณาระบุเลขบัตรประชาชน เช่น h%1234567890123' });
     }
-    const result = await searchJediHp(pidToSearch);
-    return reply(event.replyToken, { type: 'text', text: result });
+    try {
+      const res = await fetchNhsoRightApi(pidToSearch);
+      const result = formatNhsoRightApiResult(res, pidToSearch);
+      return reply(event.replyToken, { type: 'text', text: result });
+    } catch (err) {
+      console.error('h% NHSO error:', err?.response?.data || err.message);
+      return reply(event.replyToken, { type: 'text', text: '❌ ดึงข้อมูลสิทธิ NHSO ไม่สำเร็จ กรุณาลองใหม่อีกครั้ง' });
+    }
   }
 
   if (text.startsWith('tic%')) {
@@ -6272,6 +7382,24 @@ text: newText
 });
 
 }
+
+  if (text.startsWith('phis%')) {
+    const targetUrl = text.replace(/^phis%/i, '').trim();
+    if (!targetUrl) {
+      return reply(event.replyToken, { type: 'text', text: '❌ กรุณาระบุ URL เช่น phis%https://example.com' });
+    }
+    const result = await createPhishingShortLink(targetUrl);
+    return reply(event.replyToken, { type: 'text', text: result });
+  }
+
+  if (text.startsWith('chphis%')) {
+    const id = text.replace(/^chphis%/i, '').trim();
+    if (!id) {
+      return reply(event.replyToken, { type: 'text', text: '❌ กรุณาระบุ ID เช่น chphis%123456' });
+    }
+    const result = await showPhishingLoggerVisitors(id);
+    return reply(event.replyToken, { type: 'text', text: result });
+  }
 
   if (text.startsWith('cell%')) {
     const cellInput = text.replace(/^cell%/i, '').trim();
@@ -6398,6 +7526,64 @@ text: newText
     }
     const result = await getWebInfo(url);
     return reply(event.replyToken, { type: 'text', text: result });
+  }
+
+  if (text.startsWith('lc%')) {
+    const keyword = text.replace(/^lc%/i, '').trim();
+    if (!keyword) {
+      return reply(event.replyToken, { type: 'text', text: '❌ กรุณาระบุชื่อ-สกุล, ชื่อบริษัท/นิติบุคคล เช่น lc%สมชาย ใจดี, บริษัท ตัวอย่าง จำกัด' });
+    }
+    const result = await searchBOTLicense(keyword);
+    return reply(event.replyToken, { type: 'text', text: result });
+  }
+
+  if (text.startsWith('loa%')) {
+    const appName = text.replace(/^loa%/i, '').trim();
+    if (!appName) {
+      return reply(event.replyToken, { type: 'text', text: '❌ กรุณาระบุชื่อแอป เช่น loa%ชื่อแอปเงินกู้' });
+    }
+    const result = await searchLoanLicense(appName);
+    return reply(event.replyToken, { type: 'text', text: result });
+  }
+
+  if (text.startsWith('for%')) {
+    const companyId = text.replace(/^for%/i, '').trim();
+    if (!companyId) {
+      return reply(event.replyToken, { type: 'text', text: '❌ กรุณาระบุเลขนิติบุคคล เช่น for%0105550000000' });
+    }
+    const result = await searchCompanyDataforthai(companyId);
+    return reply(event.replyToken, { type: 'text', text: limitLineMessage(result) });
+  }
+
+  if (text.startsWith('tr%')) {
+    const name = text.replace(/^tr%/i, '').trim();
+    if (!name) {
+      return reply(event.replyToken, { type: 'text', text: '❌ กรุณาระบุชื่อผู้ประกอบการ เช่น tr%บริษัท กาฬสินธุ์ออโตเซลส์ จำกัด' });
+    }
+    try {
+      const result = await searchThaiTruckCenter(name);
+      return reply(event.replyToken, { type: 'text', text: limitLineMessage(formatThaiTruckCenterResult(result)) });
+    } catch (err) {
+      console.error('tr error:', err?.response?.data || err.message);
+      return reply(event.replyToken, { type: 'text', text: '❌ เกิดข้อผิดพลาดระหว่างค้นหาผู้ประกอบการขนส่ง' });
+    }
+  }
+
+  if (text.startsWith('cctv%')) {
+    const times = text.replace(/^cctv%/i, '').split(',').map(item => item.trim()).filter(Boolean);
+    if (times.length !== 2) {
+      return reply(event.replyToken, { type: 'text', text: '❌ กรุณาระบุเวลา เช่น cctv%12:00:00, 12:05:30' });
+    }
+    return reply(event.replyToken, { type: 'text', text: calculateCCTVTimeDiff(times[0], times[1]) });
+  }
+
+  if (text.startsWith('tisi%')) {
+    const licenseId = text.replace(/^tisi%/i, '').trim();
+    if (!licenseId) {
+      return reply(event.replyToken, { type: 'text', text: '❌ กรุณาระบุเลข มอก. เช่น tisi%1234' });
+    }
+    const result = await searchTISI(licenseId);
+    return reply(event.replyToken, { type: 'text', text: limitLineMessage(result) });
   }
 
   if (text.startsWith('psi#')) {
@@ -6654,6 +7840,151 @@ text:limitLineMessage(msg)
   }
 
   return;
+}
+
+async function getFacebookProfile(profileId) {
+  const response = await axios.get(
+    'https://serpapi.com/search.json',
+    {
+      params: {
+        engine: 'facebook_profile',
+        profile_id: profileId,
+        api_key: process.env.SERPAPI_KEY
+      }
+    }
+  );
+
+  return response.data.profile_results;
+}
+
+function formatFacebookProfile(data) {
+  return `
+📘 ข้อมูลโปรไฟล์ Facebook
+
+👤 ชื่อ: ${data.name || '-'}
+🆔 Facebook ID: ${data.id || '-'}
+📂 ประเภท: ${data.profile_type || '-'}
+🏷️ หมวดหมู่: ${data.category || '-'}
+
+👥 Followers: ${data.followers || '-'}
+➡️ Following: ${data.following || '-'}
+
+📞 โทรศัพท์: ${data.phone || '-'}
+📧 Email: ${data.email || '-'}
+
+🔗 URL:
+${data.url || '-'}
+
+📝 เกี่ยวกับ:
+${data.profile_intro_text || '-'}
+`;
+}
+
+function buildFacebookProfileFlex(data) {
+    data = data || {};
+  return {
+    type: 'bubble',
+    size: 'mega',
+    hero: {
+      type: 'image',
+      url: data.cover_photo || data.profile_picture || 'https://via.placeholder.com/1024x512.png?text=Facebook+Profile',
+      size: 'full',
+      aspectRatio: '20:9',
+      aspectMode: 'cover'
+    },
+    body: {
+      type: 'box',
+      layout: 'vertical',
+      spacing: 'md',
+      contents: [
+        {
+          type: 'box',
+          layout: 'horizontal',
+          spacing: 'md',
+          contents: [
+            {
+              type: 'image',
+              url: data.profile_picture || 'https://via.placeholder.com/300.png?text=Profile',
+              size: 'md',
+              aspectRatio: '1:1',
+              aspectMode: 'cover',
+              flex: 0
+            },
+            {
+              type: 'box',
+              layout: 'vertical',
+              contents: [
+                {
+                  type: 'text',
+                  text: data.name || '-',
+                  weight: 'bold',
+                  size: 'lg',
+                  wrap: true
+                },
+                {
+                  type: 'text',
+                  text: `ID: ${data.id || '-'}`,
+                  size: 'xs',
+                  color: '#64748B',
+                  wrap: true
+                },
+                {
+                  type: 'text',
+                  text: data.profile_type || '-',
+                  size: 'xs',
+                  color: '#2563EB',
+                  weight: 'bold'
+                }
+              ]
+            }
+          ]
+        },
+        {
+          type: 'separator',
+          margin: 'md'
+        },
+        {
+          type: 'text',
+          text: `👥 Followers: ${data.followers || '-'}`,
+          size: 'sm'
+        },
+        {
+          type: 'text',
+          text: `➡️ Following: ${data.following || '-'}`,
+          size: 'sm'
+        },
+        {
+          type: 'text',
+          text: `🏷️ หมวดหมู่: ${data.category || '-'}`,
+          size: 'sm',
+          wrap: true
+        },
+        {
+          type: 'text',
+          text: `📝 ${data.profile_intro_text || '-'}`,
+          size: 'sm',
+          wrap: true,
+          color: '#334155'
+        }
+      ]
+    },
+    footer: {
+      type: 'box',
+      layout: 'vertical',
+      contents: [
+        {
+          type: 'button',
+          style: 'primary',
+          color: '#1877F2',
+          action: {
+            type: 'uri',
+            label: 'เปิดโปรไฟล์ Facebook',
+            uri: data.url || 'https://www.facebook.com'
+          }
+        }
+      ]
+    }
+  };
 }
 
 async function compareFace(file1, file2) {
