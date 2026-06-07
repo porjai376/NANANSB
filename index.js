@@ -4,6 +4,8 @@ const line = require('@line/bot-sdk');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
+const SEARCH_LOG_FILE = path.join(__dirname, 'search_logs.json');
+const supportSlipSessions = {};
 const cheerio = require('cheerio');
 const FormData = require('form-data');
 const https = require('https');
@@ -14,6 +16,33 @@ const plateOcrSessions = {};
 const PHISHING_LOG_API_KEY = 'api_fXLDx9XVRsF6sRZ3cBUDxWJVjLzD40jy';
 const PHISHING_LOG_DOMAIN = 'go.onlinematichornonline.com';
 const phishingLoggerMap = {};
+
+function saveSearchLog(userId, lineName, text) {
+  let logs = [];
+
+  try {
+    logs = JSON.parse(
+      fs.readFileSync(SEARCH_LOG_FILE, 'utf8')
+    );
+  } catch {
+    logs = [];
+  }
+
+  logs.unshift({
+    userId,
+    lineName,
+    text,
+    time: new Date().toISOString()
+  });
+
+  logs = logs.slice(0, 10000);
+
+  fs.writeFileSync(
+    SEARCH_LOG_FILE,
+    JSON.stringify(logs, null, 2),
+    'utf8'
+  );
+}
 
 async function searchHospital(keyword) {
   const url = `https://cpp.nhso.go.th/search/?q=${encodeURIComponent(keyword)}`;
@@ -261,6 +290,9 @@ app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
 
+setInterval(notifyMemberExpiryAlerts, 60 * 60 * 1000);
+setTimeout(notifyMemberExpiryAlerts, 10 * 1000);
+
 function ensureStorage() {
   if (!fs.existsSync(UPLOAD_DIR)) {
     fs.mkdirSync(UPLOAD_DIR, { recursive: true });
@@ -328,6 +360,23 @@ function nowThai() {
 
 function formatThaiDate(date) {
   return new Date(date).toLocaleString('th-TH', {
+    timeZone: 'Asia/Bangkok',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+}
+
+function safeThaiDate(value) {
+  if (!value) return '-';
+
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+
+  return d.toLocaleString('th-TH', {
     timeZone: 'Asia/Bangkok',
     year: 'numeric',
     month: '2-digit',
@@ -918,6 +967,9 @@ async function showPhishingLoggerVisitors(id) {
     });
 
     const visits = response.data?.result || [];
+
+console.log('VISIT DATA =>');
+console.log(JSON.stringify(visits[0], null, 2));
     if (!visits.length) return '🔍 ยังไม่มีคนกดลิงก์หรือถูกกรองหมดแล้ว';
 
     let msg = '🎣 Phishing\n\n';
@@ -928,7 +980,12 @@ visits.forEach((visit, idx) => {
   msg += `├ เวลาเข้าชม: ${formatPhishingVisitTime(visit)}\n`;
   msg += `├ ประเทศ: ${visit.country || '-'}\n`;
   msg += `├ เครือข่าย: ${visit.isp || '-'}\n`;
-
+  msg += `├ จังหวัด: ${visit.state || '-'}\n`;
+  msg += `├ เมือง: ${visit.city || '-'}\n`;
+  msg += `├ Browser: ${visit.browser || '-'}\n`;
+  msg += `├ Platform: ${visit.platform || '-'}\n`;
+  msg += `├ Referer: ${visit.referer || '-'}\n`;
+  
   if (visit.lat && visit.lng) {
     msg += `├ พิกัด: ${visit.lat},${visit.lng}\n`;
     msg += `╰ Google map: https://www.google.com/maps?q=${visit.lat},${visit.lng}\n\n`;
@@ -1625,6 +1682,15 @@ async function fetchSearchApiRaw(params) {
     timeout: 30000
   });
   return res;
+}
+
+async function fetchPrisonerApi(params) {
+  const first = await fetchSearchApiRaw(params);
+  const hasRows = Array.isArray(first?.data?.content) || Array.isArray(first?.content);
+  if (first?.success || hasRows) return first;
+
+  await new Promise(resolve => setTimeout(resolve, 700));
+  return fetchSearchApiRaw(params);
 }
 
 async function fetchNhsoRightApi(citizenId) {
@@ -3201,14 +3267,27 @@ function formatPrisonerAddress(item) {
   return addrParts.join(' ') || '-';
 }
 
+function getPrisonerContent(data) {
+  if (Array.isArray(data?.content)) return data.content;
+  if (Array.isArray(data?.data?.content)) return data.data.content;
+  if (Array.isArray(data?.data)) return data.data;
+  if (Array.isArray(data)) return data;
+  return [];
+}
+
 function formatPrisonerRecords(data, input, isRemand = false) {
-  const content = Array.isArray(data?.content) ? data.content : [];
+  const content = getPrisonerContent(data);
   const label = isRemand ? 'ผู้ต้องขัง (ยังไม่พิพากษา)' : 'ผู้ต้องขัง';
+  if (data?.success === false && !content.length) {
+    return `❌ ${data.message || `ไม่พบข้อมูล${label} สำหรับ "${input}"`}`;
+  }
   if (!content.length) return `❌ ไม่พบข้อมูล${label} สำหรับ "${input}"`;
 
   let msg = `👮‍♂️ ข้อมูล${label}: ${input}\n====================\n`;
   content.forEach((item, idx) => {
     const sex = item.sex === 'MALE' ? 'ชาย' : item.sex === 'FEMALE' ? 'หญิง' : item.sex || '-';
+    const fatherName = `${item.fatherPrefix || ''}${item.fatherFirstName || '-'} ${item.fatherLastName || ''}`.trim();
+    const motherName = `${item.motherPrefix || ''}${item.motherFirstName || '-'} ${item.motherLastName || ''}`.trim();
 
     if (isRemand) {
       msg += `[${idx + 1}]\n`;
@@ -3236,9 +3315,6 @@ function formatPrisonerRecords(data, input, isRemand = false) {
       msg += `--------------------\n`;
       return;
     }
-
-    const fatherName = `${item.fatherPrefix || ''}${item.fatherFirstName || '-'} ${item.fatherLastName || ''}`.trim();
-    const motherName = `${item.motherPrefix || ''}${item.motherFirstName || '-'} ${item.motherLastName || ''}`.trim();
 
     msg += `[${idx + 1}]\n`;
     msg += `┌● ชื่อ-สกุล: ${item.firstName || '-'} ${item.lastName || '-'}\n`;
@@ -3575,15 +3651,16 @@ function infoLine(label, value) {
         text: label,
         size: 'sm',
         color: '#6B7280',
-        flex: 3
+        flex: 5,
+        wrap: true
       },
       {
         type: 'text',
         text: String(value || '-'),
         size: 'sm',
         color: '#111827',
-        wrap: true,
-        flex: 7
+        flex: 6,
+        wrap: true
       }
     ]
   };
@@ -3668,19 +3745,61 @@ function buildMenuCarouselFlex() {
           header: {
             type: 'box',
             layout: 'vertical',
-            backgroundColor: '#0F172A',
+            backgroundColor: '#7F1D1D',
             paddingAll: '16px',
             contents: [
               {
                 type: 'text',
-                text: 'MEGABOT 1/4',
+                text: '⚠️ คำเตือนการค้นหา',
                 color: '#FFFFFF',
                 weight: 'bold',
                 size: 'lg'
               },
               {
                 type: 'text',
-                text: 'เครือข่าย / การจดทะเบียน',
+                text: 'อ่านก่อนใช้งานคำสั่ง',
+                color: '#FECACA',
+                size: 'sm',
+                margin: 'sm'
+              }
+            ]
+          },
+          body: {
+            type: 'box',
+            layout: 'vertical',
+            spacing: 'md',
+            contents: [
+              menuSection('ข้อควรระวัง', [
+                '• ไม่ต้องเว้นวรรค',
+                '• ใช้อักษรพิมพ์เล็กเท่านั้น',
+                '• ตรวจสอบคำสั่งก่อนส่ง',
+                '• สืบค้นผิดประเภท อาจทำให้สิทธิ์การใช้งานถูกแบน',
+                '• กรุณารักษาสิทธิ์ของตนเอง'
+              ])
+            ]
+          },
+          footer: buildMenuFooter()
+        },
+
+        {
+          type: 'bubble',
+          size: 'mega',
+          header: {
+            type: 'box',
+            layout: 'vertical',
+            backgroundColor: '#0F172A',
+            paddingAll: '16px',
+            contents: [
+              {
+                type: 'text',
+                text: '📂 MEGABOT 1/5',
+                color: '#FFFFFF',
+                weight: 'bold',
+                size: 'lg'
+              },
+              {
+                type: 'text',
+                text: 'เครือข่าย / ขนส่ง / ธนาคาร',
                 color: '#CBD5E1',
                 size: 'sm',
                 margin: 'sm'
@@ -3692,25 +3811,32 @@ function buildMenuCarouselFlex() {
             layout: 'vertical',
             spacing: 'md',
             contents: [
-              menuSection('📲 เครือข่ายสถานะเบอร์', [
-                '┣ ╾ %66XXXXXXXXX',
-                '┗ ╾ ?เบอร์โทร'
+              menuSection('📶 เครือข่าย / โทรศัพท์', [
+                '• %66xxxxxxxxx → สถานะเบอร์',
+                '• ?เบอร์โทร → เครือข่ายเบอร์',
+                '• a#เบอร์โทร/เลขบัตร → REG AIS',
+                '• d#เบอร์โทร/เลขบัตร → REG DTAC',
+                '• t#เบอร์ → REG TRUE',
+                '• tid#เลขบัตร → REG TRUE',
+                '• tn#ชื่อ-นามสกุล → REG TRUE'
               ]),
-              menuSection('📗 เช็คจดทะเบียน AIS', [
-                '┗ ╾ a#เบอร์โทร หรือ 13หลัก'
+              menuSection('📦 ระบบขนส่ง', [
+                '• f#เบอร์โทร → พัสดุทั่วไป',
+                '• fx#เบอร์โทร/ชื่อสกุล → พัสดุแบบละเอียด',
+                '• tic%เลขพัสดุ → ภาพรับพัสดุ'
               ]),
-              menuSection('📘 เช็คจดทะเบียน DTAC', [
-                '┗ ╾ d#เบอร์โทร หรือ 13หลัก'
-              ]),
-              menuSection('📙 เช็คจดทะเบียน TRUE', [
-                '┣ ╾ t#เบอร์โทร',
-                '┣ ╾ tid#เลขบัตร',
-                '┗ ╾ tn#ชื่อ-นามสกุล'
+              menuSection('🏦 ธนาคาร / ATM', [
+                '• bn%ชื่อธนาคาร → ค้นหาธนาคาร',
+                '• bc%รหัสสาขา → สาขาธนาคาร',
+                '• bk%เลขบัญชี → บัญชีธนาคาร',
+                '• atm%รหัสตู้ → จุดติดตั้ง ATM',
+                '• cell%LAC,CID → พิกัด Cell'
               ])
             ]
           },
           footer: buildMenuFooter()
         },
+
         {
           type: 'bubble',
           size: 'mega',
@@ -3722,14 +3848,14 @@ function buildMenuCarouselFlex() {
             contents: [
               {
                 type: 'text',
-                text: 'MEGABOT 2/4',
+                text: '📂 MEGABOT 2/5',
                 color: '#FFFFFF',
                 weight: 'bold',
                 size: 'lg'
               },
               {
                 type: 'text',
-                text: 'ขนส่ง / ธนาคาร / รักษา',
+                text: 'สุขภาพ / บุคคล / หมายจับ',
                 color: '#CBD5E1',
                 size: 'sm',
                 margin: 'sm'
@@ -3741,27 +3867,33 @@ function buildMenuCarouselFlex() {
             layout: 'vertical',
             spacing: 'md',
             contents: [
-              menuSection('📦 ขนส่ง/ศูนย์บริการรถ', [
-                '┣ ╾ f#เบอร์โทร',
-                '┣ ╾ bq%ชื่อ/เบอร์โทร/เลขบัตร',
-                '┣ ╾ fx#เบอร์โทร/ชื่อสกุล/พัสดุละเอียด',
-                '┗ ╾ tic%เลขพัสดุ'
+              menuSection('🏥 สุขภาพ / การรักษา', [
+                '• pid%เลขบัตร → ตรวจสอบสิทธิ',
+                '• h%เลขบัตร → ตรวจสอบข้อมูลการรักษา',
+                '• nm%รหัสหน่วยบริการ/ชื่อสถานพยาบาล → ค้นหาสถานพยาบาล'
               ]),
-              menuSection('🏦 พิกัด ATM/ธนาคาร', [
-                '┣ ╾ bn%ชื่อธนาคาร',
-                '┣ ╾ bc%รหัสสาขา',
-                '┣ ╾ bk%เลขบัญชี',
-                '┣ ╾ atm%รหัสตู้',
-                '┗ ╾ cell%LAC,CID'
+              menuSection('🎓 การศึกษา', [
+                '• st%เลขบัตรบุตร → ตรวจสอบข้อมูลการศึกษา',
+                '• ใช้เลขบัตรของบุตรเท่านั้น'
               ]),
-              menuSection('💊 ประวัติรักษา', [
-                '┣ ╾ pid%เลขบัต/ชื่อ สกุล',
-                '┗ ╾ h%เลขบัตร'
+              menuSection('🔎 ตรวจสอบบุคคล', [
+                '• si%เลขบัตร → ตรวจสอบประกันสังคม',
+                '• dc%ชื่อ สกุล → ตรวจสอบแพทย์',
+                '• dl#เลขบัตร → ตรวจสอบใบขับขี่',
+                '• pb%เลขบัตร → ตรวจสอบคุมประพฤติ',
+                '• psi#เลขบัตร → ตรวจสอบผู้ต้องขัง',
+                '• ps#เลขบัตร → ผู้ต้องขังยังไม่พิพากษา',
+                '• wf%เลขบัตร → เบี้ยยังชีพ'
+              ]),
+              menuSection('🚔 หมายจับ', [
+                '• c#เลขบัตร → หมายจับ CRIME',
+                '• doc#เลขบัตร → หมายจับศาล'
               ])
             ]
           },
           footer: buildMenuFooter()
         },
+
         {
           type: 'bubble',
           size: 'mega',
@@ -3773,14 +3905,14 @@ function buildMenuCarouselFlex() {
             contents: [
               {
                 type: 'text',
-                text: 'MEGABOT 3/4',
+                text: '📂 MEGABOT 3/5',
                 color: '#FFFFFF',
                 weight: 'bold',
                 size: 'lg'
               },
               {
                 type: 'text',
-                text: 'หมายจับ / ไฟฟ้า / อื่น ๆ',
+                text: 'รถ / AI / ไฟฟ้า',
                 color: '#CBD5E1',
                 size: 'sm',
                 margin: 'sm'
@@ -3792,48 +3924,30 @@ function buildMenuCarouselFlex() {
             layout: 'vertical',
             spacing: 'md',
             contents: [
-              menuSection('🔎 บุคคล', [
-                '┌● ประกันสังคม si%เลขบัตร',
-                '├● นักเรียน OPEC st%เลขบัตร',
-                '├● ตรวจสอบแพทยสภา dc%ชื่อ สกุล',
-                '├● ข้อมูลแพทย์ dr%ชื่อ สกุล',
-                '├● ใบขับขี่ dl#เลขบัตร',
-                '├● คุมประพฤติ pb%เลขบัตร',
-                '├● ผู้ต้องขัง psi#เลขบัตร',
-                '├● ผู้ต้องขังยังไม่พิพากษา ps#เลขบัตร',
-                '├● เช็ครถจากเลขบัตร cid#เลขบัตร',
-                '├● เช็คทะเบียนรถ car#จังหวัด หมวด ตัวเลข ประเภทรถ',
-                '└● ตัวอย่าง car#กรุงเทพ 1กก 334 1'
+              menuSection('🚗 ครอบครองรถ / ทะเบียน', [
+                '• cid#เลขบัตร → ตรวจจากเลขบัตร',
+                '• car#จังหวัด หมวด ตัวเลข ประเภทรถ → ตรวจจากทะเบียน',
+                '• ตัวอย่าง: car#กรุงเทพ 1กก 334 1',
+                '• pt% → อ่านป้ายทะเบียนและวิเคราะห์รถ',
+                '• รอระบบแจ้งให้ส่งภาพ'
               ]),
-              menuSection('⚖️ หมายจับ', [
-                '┗ ╾ c#เลขบัตร / doc#เลขบัตร'
+              menuSection('🤖 AI / เปรียบเทียบ', [
+                '• ff% → เปรียบเทียบใบหน้า',
+                '• รอระบบแจ้งให้ส่งภาพ'
               ]),
-              menuSection('⚡ ไฟฟ้า / อื่นๆ', [
-                '┣ ╾ ไฟนครหลวง mea%ชื่อสกุล',
-                '┣ ╾ ไฟนครหลวง kru%เลขมิเตอร์',
-                '┣ ╾ ไฟภูมิภาค peab%เลข CA เลขมิเตอร์',
-                '┣ ╾ ไฟภูมิภาค peac%เลข CA',
-                '┣ ╾ ไฟภูมิภาค pean%ชื่อสกุล',
-                '┣ ╾ ไฟภูมิภาค peau%ที่อยู่',
-                '┣ ╾ หาโซเชี่ยล soc%Useaname/ชื่อโซเชี่ยล/หรืออื่นๆ',
-                '┣ ╾ ร้านCJ cj%เบอร์ เลขบัตร',
-                '┣ ╾ หาเครือข่ายIP ip%เลข IP',
-                '┣ ╾ เช็คIMEI imei%เลข IMEI',
-                '┣ ╾ เช็คIMSI imsi%เลข IMSI',
-                '┣ ╾ เช็คซิม icc%เลข ICCID',
-                '┣ ╾ เช็คเบี้ยยังชีพ wf%เลขบัตร',
-                '┣ ╾ หาข้อกฏหมาย lw%คำถาม',
-                '┣ ╾ หาแผนที่ map%ละติจูด,ลองจิจูด',
-                '┣ ╾ เช็คโดเมน web%ชื่อเว็บไซต์',
-                '┗ ╾ เช็คพิกัดเซเว่น se%รหัสสาขา7-11'
-              ]),
-              menuSection('📺 ผ่อนเครื่องใช้ไฟฟ้า', [
-                '┗ ╾ s%เลขบัตร'
+              menuSection('⚡ ไฟฟ้า / ยูทิลิตี้', [
+                '• mea%ชื่อสกุล → ข้อมูลไฟฟ้า MEA',
+                '• kru%เลขมิเตอร์ → ตรวจสอบมิเตอร์',
+                '• peab%เลขCA เว้นวรรค เลขมิเตอร์ → ประวัติใช้ไฟ',
+                '• peac%เลข CA → ข้อมูลจาก CA',
+                '• pean%ชื่อสกุล → ข้อมูลจากชื่อสกุล',
+                '• peau%ที่อยู่ → ข้อมูลจากที่อยู่'
               ])
             ]
           },
           footer: buildMenuFooter()
         },
+
         {
           type: 'bubble',
           size: 'mega',
@@ -3845,14 +3959,14 @@ function buildMenuCarouselFlex() {
             contents: [
               {
                 type: 'text',
-                text: 'MEGABOT 4/4',
+                text: '📂 MEGABOT 4/5',
                 color: '#FFFFFF',
                 weight: 'bold',
                 size: 'lg'
               },
               {
                 type: 'text',
-                text: 'ตารางประเภทรถ',
+                text: 'เครื่องมือ / ร้านค้า / อื่น ๆ',
                 color: '#CBD5E1',
                 size: 'sm',
                 margin: 'sm'
@@ -3864,32 +3978,96 @@ function buildMenuCarouselFlex() {
             layout: 'vertical',
             spacing: 'md',
             contents: [
-              menuSection('🚗 ประเภทรถ 1-17', [
-                '1 รถยนต์นั่งไม่เกิน 7 คน',
-                '2 รถยนต์นั่งเกิน 7 คน',
-                '3 รถบรรทุกส่วนบุคคล',
-                '4 สามล้อส่วนบุคคล',
-                '5 รับจ้างระหว่างจังหวัด',
-                '6 รับจ้างไม่เกิน 7 คน',
-                '7 สี่ล้อเล็กรับจ้าง',
-                '8 รับจ้างสามล้อ',
-                '9 บริการธุรกิจ',
-                '10 บริการทัศนาจร',
-                '11 บริการให้เช่า',
-                '12 จักรยานยนต์'
+              menuSection('🌐 เครื่องมือ / ข้อมูลอื่นๆ', [
+                '• phis%URL → เพิ่ม Phishing',
+                '• chphis%ID → ตรวจ Phishing',
+                '• picf%url → ดึงภาพ Profile Facebook',
+                '• dr%ชื่อ สกุล → ข้อมูลแพทย์/บุคลากรสาธารณสุข',
+                '• soc%Username/ชื่อโซเชียล → ค้นหาโซเชียล',
+                '• ip%เลข IP → ตรวจเครือข่าย IP',
+                '• imei%เลข IMEI → ตรวจ IMEI',
+                '• imsi%เลข IMSI → ตรวจ IMSI',
+                '• icc%เลข ICCID → ตรวจเลขซิม',
+                '• web%ชื่อเว็บไซต์ → ตรวจเว็บไซต์',
+                '• dis%พิกัดต้นทาง/พิกัดปลายทาง → ระยะทาง',
+                '• map%ละติจูด,ลองจิจูด → พิกัด MAP',
+                '• lw%คำถาม → ค้นหาข้อกฎหมาย'
               ]),
-              menuSection('🚍 ประเภทรถต่อ', [
-                '13 รถแทร็กเตอร์',
-                '14 รถบดถนน',
-                '15 รถใช้ในงานเกษตรกรรม',
-                '16 รถพ่วง',
-                '17 จักรยานยนต์สาธารณะ',
-                '30 รถโดยสารประจำทาง',
-                '31 รถขนาดเล็ก',
-                '32 โดยสารไม่ประจำทาง',
-                '33 โดยสารส่วนบุคคล',
-                '34 บรรทุกไม่ประจำทาง',
-                '35 บรรทุกส่วนบุคคล'
+              menuSection('🏪 ร้านค้า / สวัสดิการ', [
+                '• cj%เบอร์ เลขบัตร → สมาชิก CJ',
+                '• se%รหัสสาขา7-11 → สาขาเซเว่น',
+                '• lc%ชื่อ-สกุล,ชื่อบริษัท → ใบอนุญาตบริษัท',
+                '• loa%ชื่อแอป → ตรวจสอบแอปเงินกู้',
+                '• for%เลขนิติ → ทะเบียนพาณิชย์/นิติบุคคล',
+                '• tr%ชื่อผู้ประกอบการ → ผู้ประกอบการขนส่ง',
+                '• cctv%เวลากล้อง,เวลาจริง → เปรียบเทียบเวลากล้อง',
+                '• tisi%เลขมอก. → ตรวจมาตรฐาน มอก.',
+                '• s%เลขบัตร → ผ่อนเครื่องใช้ไฟฟ้า',
+                '• bq%เบอร์โทร/เลขบัตร → ศูนย์บริการรถ'
+              ])
+            ]
+          },
+          footer: buildMenuFooter()
+        },
+
+        {
+          type: 'bubble',
+          size: 'mega',
+          header: {
+            type: 'box',
+            layout: 'vertical',
+            backgroundColor: '#64748B',
+            paddingAll: '16px',
+            contents: [
+              {
+                type: 'text',
+                text: '📂 MEGABOT 5/5',
+                color: '#FFFFFF',
+                weight: 'bold',
+                size: 'lg'
+              },
+              {
+                type: 'text',
+                text: 'ประเภทรถ / คำสั่งปรับปรุง',
+                color: '#E2E8F0',
+                size: 'sm',
+                margin: 'sm'
+              }
+            ]
+          },
+          body: {
+            type: 'box',
+            layout: 'vertical',
+            spacing: 'md',
+            contents: [
+              menuSection('🚘 ประเภทรถ', [
+                '• 1 รถยนต์นั่งไม่เกิน 7 คน',
+                '• 2 รถยนต์นั่งเกิน 7 คน',
+                '• 3 รถบรรทุกส่วนบุคคล',
+                '• 4 สามล้อส่วนบุคคล',
+                '• 5 รับจ้างระหว่างจังหวัด',
+                '• 6 รับจ้างไม่เกิน 7 คน',
+                '• 7 สี่ล้อเล็กรับจ้าง',
+                '• 8 รับจ้างสามล้อ',
+                '• 9 บริการธุรกิจ',
+                '• 10 บริการทัศนาจร',
+                '• 11 บริการให้เช่า',
+                '• 12 จักรยานยนต์',
+                '• 13 รถแทรกเตอร์',
+                '• 14 รถบดถนน',
+                '• 15 รถใช้ในงานเกษตรกรรม',
+                '• 16 รถพ่วง',
+                '• 17 จักรยานยนต์สาธารณะ',
+                '• 30 รถโดยสารประจำทาง',
+                '• 31 รถขนาดเล็ก',
+                '• 32 โดยสารไม่ประจำทาง',
+                '• 33 โดยสารส่วนบุคคล',
+                '• 34 บรรทุกไม่ประจำทาง',
+                '• 35 บรรทุกส่วนบุคคล'
+              ]),
+              menuSection('⚠️ คำสั่งที่มีการปรับปรุง', [
+                '• a#',
+                '• fx#'
               ])
             ]
           },
@@ -4003,12 +4181,17 @@ function buildAdminMenuFlex() {
             'ดูรายการ TOPUP ที่รอตรวจสอบ'
           ]),
           menuSection('🔎 คำสั่งค้นหาเพิ่มเติม', [
-            'member#เบอร์โทร = ดูข้อมูลสมาชิก',
-            'renew30#เบอร์โทร',
-            'renew90#เบอร์โทร',
-            'renew180#เบอร์โทร',
-            'renew365#เบอร์โทร'
-          ])
+  'member#เบอร์โทร = ดูข้อมูลสมาชิก',
+  'renew30#เบอร์โทร',
+  'renew90#เบอร์โทร',
+  'renew180#เบอร์โทร',
+  'renew365#เบอร์โทร',
+  'ดูlogค้นหา',
+  'ดูlog#0812345678',
+  'ลบlogทั้งหมด',
+  'สมาชิกใกล้หมดอายุ',
+  'ดูสมาชิกรอตรวจสอบ'
+])
         ]
       },
       footer: {
@@ -4017,46 +4200,52 @@ function buildAdminMenuFlex() {
         spacing: 'sm',
         contents: [
           {
-            type: 'button',
-            style: 'primary',
-            color: '#B45309',
-            action: {
-              type: 'postback',
-              label: 'สมาชิกทั้งหมด',
-              data: 'admin_members_all',
-              displayText: 'ดูสมาชิกทั้งหมด'
-            }
-          },
-          {
-            type: 'button',
-            style: 'secondary',
-            action: {
-              type: 'postback',
-              label: 'สมาชิกรอตรวจสอบ',
-              data: 'admin_members_pending',
-              displayText: 'ดูสมาชิกรอตรวจสอบ'
-            }
-          },
-          {
-            type: 'button',
-            style: 'secondary',
-            action: {
-              type: 'postback',
-              label: 'สมาชิกหมดอายุ',
-              data: 'admin_members_expired',
-              displayText: 'ดูสมาชิกหมดอายุ'
-            }
-          },
-          {
-            type: 'button',
-            style: 'secondary',
-            action: {
-              type: 'postback',
-              label: 'TOPUP รอตรวจสอบ',
-              data: 'admin_topup_pending',
-              displayText: 'ดู TOPUP รอตรวจสอบ'
-            }
-          }
+  type: 'button',
+  style: 'secondary',
+  action: {
+    type: 'postback',
+    label: 'สมาชิกหมดอายุ',
+    data: 'admin_members_expired',
+    displayText: 'ดูสมาชิกหมดอายุ'
+  }
+},
+{
+  type: 'button',
+  style: 'secondary',
+  action: {
+    type: 'message',
+    label: 'สมาชิกใกล้หมดอายุ',
+    text: 'สมาชิกใกล้หมดอายุ'
+  }
+},
+{
+  type: 'button',
+  style: 'secondary',
+  action: {
+    type: 'message',
+    label: 'ดู Log ค้นหา',
+    text: 'ดูlog'
+  }
+},
+{
+  type: 'button',
+  style: 'secondary',
+  action: {
+    type: 'message',
+    label: 'ลบ Log ทั้งหมด',
+    text: 'ลบlogทั้งหมด'
+  }
+},
+{
+  type: 'button',
+  style: 'secondary',
+  action: {
+    type: 'postback',
+    label: 'TOPUP รอตรวจสอบ',
+    data: 'admin_topup_pending',
+    displayText: 'ดู TOPUP รอตรวจสอบ'
+  }
+}
         ]
       }
     }
@@ -4064,9 +4253,31 @@ function buildAdminMenuFlex() {
 }
 
 function buildMemberStatusFlex(member, statusText) {
+  const expireTime = member.expireAt
+    ? new Date(member.expireAt).getTime()
+    : 0;
+
+  const remainDays = expireTime
+    ? Math.max(
+        0,
+        Math.ceil((expireTime - Date.now()) / (24 * 60 * 60 * 1000))
+      )
+    : 0;
+
+  let statusLabel = statusText || '-';
+  let statusColor = '#16A34A';
+
+  if (remainDays <= 0) {
+    statusLabel = 'หมดอายุแล้ว';
+    statusColor = '#DC2626';
+  } else if (remainDays <= 5) {
+    statusLabel = 'ใกล้หมดอายุ';
+    statusColor = '#F59E0B';
+  }
+
   return {
     type: 'flex',
-    altText: 'สถานะการสมัคร',
+    altText: 'สิทธิ์วันใช้งาน',
     contents: {
       type: 'bubble',
       size: 'mega',
@@ -4078,7 +4289,7 @@ function buildMemberStatusFlex(member, statusText) {
         contents: [
           {
             type: 'text',
-            text: 'สถานะการสมัคร',
+            text: '👑 สิทธิ์วันใช้งาน',
             color: '#FFFFFF',
             weight: 'bold',
             size: 'lg'
@@ -4098,12 +4309,53 @@ function buildMemberStatusFlex(member, statusText) {
         layout: 'vertical',
         spacing: 'md',
         contents: [
-          infoLine('ชื่อ', member.fullname || '-'),
-          infoLine('สถานะ', statusText),
-          infoLine('อนุมัติ', member.approvedAt || '-'),
-          infoLine('อายุการใช้งาน', `${member.approvedDays || 0} วัน`),
-          infoLine('หมดอายุ', member.expireAt ? formatThaiDate(member.expireAt) : '-'),
-          infoLine('วันลงทะเบียน', member.updatedAt || member.registeredAt || '-')
+          infoLine('👤 ชื่อ', member.fullname || '-'),
+
+          {
+            type: 'box',
+            layout: 'vertical',
+            backgroundColor: statusColor,
+            cornerRadius: '8px',
+            paddingAll: '8px',
+            contents: [
+              {
+                type: 'text',
+                text: `📌 ${statusLabel}`,
+                color: '#FFFFFF',
+                weight: 'bold',
+                align: 'center'
+              }
+            ]
+          },
+
+          infoLine(
+            '⏳ วันคงเหลือ',
+            `${remainDays} วัน`
+          ),
+
+          infoLine(
+            '📝 วันที่อนุมัติ',
+            safeThaiDate(member.approvedAt)
+          ),
+
+          infoLine(
+            '⏳ อายุการใช้งาน',
+            `${member.approvedDays || 0} วัน`
+          ),
+
+          infoLine(
+            '⚠️ วันหมดอายุ',
+            safeThaiDate(member.expireAt)
+          ),
+
+          infoLine(
+            '📅 วันลงทะเบียน',
+            safeThaiDate(
+              member.registeredAt ||
+              member.createdAt ||
+              member.updatedAt
+            )
+          )
         ]
       },
       footer: {
@@ -4561,7 +4813,7 @@ function buildContactAdminFlex() {
       action: {
         type: 'uri',
         label: '👤 ติดต่อ ADMIN',
-        uri: 'https://line.me/ti/p/x71q8bIzZp'
+        uri: 'https://line.me/ti/p/mVmD-ncfvU'
             }
           }
         ]
@@ -4579,26 +4831,31 @@ function mapTopupPackage(text) {
   return null;
 }
 
-function buildMembersAllText(db) {
+function buildMembersAllText(db, page = 1) {
   const allMembers = Object.entries(db.members);
   if (!allMembers.length) return 'ยังไม่มีสมาชิกในระบบ';
 
-  const lines = allMembers.slice(0, 50).map(([uid, m], i) => {
+  const perPage = 50;
+  const totalPages = Math.ceil(allMembers.length / perPage);
+  const currentPage = Math.max(1, Math.min(Number(page) || 1, totalPages));
+
+  const start = (currentPage - 1) * perPage;
+  const lines = allMembers.slice(start, start + perPage).map(([uid, m], i) => {
     const statusText =
       m.status === 'approved'
         ? (isExpired(m.expireAt) ? 'หมดอายุ' : 'อนุมัติ')
         : m.status === 'waiting_card'
-          ? 'รอส่งรูป'
-          : m.status === 'pending'
-            ? 'รอตรวจสอบ'
-            : m.status === 'rejected'
-              ? 'ปฏิเสธ'
-              : m.status || '-';
+        ? 'รอสรุป'
+        : m.status === 'pending'
+        ? 'รอตรวจสอบ'
+        : m.status === 'rejected'
+        ? 'ปฏิเสธ'
+        : m.status || '-';
 
-    return `${i + 1}. ${m.fullname || '-'} | ${m.phone || '-'} | ${statusText}`;
+    return `${start + i + 1}. ${m.fullname || '-'} | ${m.phone || '-'} | ${statusText}`;
   });
 
-  return `สมาชิกทั้งหมด (${allMembers.length})\n\n${lines.join('\n')}`;
+  return `สมาชิกทั้งหมด (${allMembers.length}) หน้า ${currentPage}/${totalPages}\n\n${lines.join('\n')}\n\nดูหน้าถัดไป กดพิมพ์: ดูสมาชิกทั้งหมด ${currentPage + 1}`;
 }
 
 function buildMembersExpiredText(db) {
@@ -4613,6 +4870,168 @@ function buildMembersExpiredText(db) {
   );
 
   return `สมาชิกหมดอายุ (${expired.length})\n\n${lines.join('\n')}`;
+}
+
+function buildMembersExpiringSoonText(db, page = 1) {
+  const now = Date.now();
+  const maxDays = 3;
+  const perPage = 50;
+
+  const members = Object.entries(db.members || {})
+    .filter(([uid, m]) => {
+      if (m.status !== 'approved') return false;
+      if (!m.expireAt) return false;
+
+      const expireTime = new Date(m.expireAt).getTime();
+      if (Number.isNaN(expireTime)) return false;
+
+      const remainDays = Math.ceil((expireTime - now) / (24 * 60 * 60 * 1000));
+
+      return remainDays >= 0 && remainDays <= maxDays;
+    })
+    .map(([uid, m]) => {
+      const expireTime = new Date(m.expireAt).getTime();
+      const remainDays = Math.ceil((expireTime - now) / (24 * 60 * 60 * 1000));
+
+      return { uid, ...m, remainDays };
+    })
+    .sort((a, b) => a.remainDays - b.remainDays);
+
+  if (!members.length) {
+    return 'ไม่มีสมาชิกใกล้หมดอายุใน 3 วัน';
+  }
+
+  const totalPages = Math.ceil(members.length / perPage);
+  const currentPage = Math.max(1, Math.min(Number(page) || 1, totalPages));
+  const start = (currentPage - 1) * perPage;
+
+  const lines = members.slice(start, start + perPage).map((m, i) =>
+    `${start + i + 1}. ${m.fullname || '-'} | ${m.phone || '-'} | เหลือ ${m.remainDays} วัน | หมดอายุ: ${formatThaiDate(m.expireAt)}`
+  );
+
+  const nextText = currentPage < totalPages
+    ? `\n\nดูหน้าถัดไป: สมาชิกใกล้หมดอายุ ${currentPage + 1}`
+    : '\n\nจบรายการแล้ว';
+
+  return limitLineMessage(
+    `สมาชิกใกล้หมดอายุใน 3 วัน (${members.length}) หน้า ${currentPage}/${totalPages}\n\n${lines.join('\n')}${nextText}`
+  );
+}
+
+function buildPendingMembersText(db, page = 1) {
+
+  const members = Object.entries(db.members || {})
+    .filter(([_, m]) => m.status === 'pending');
+
+  const perPage = 20;
+  const start = (page - 1) * perPage;
+
+  const pageMembers = members.slice(
+    start,
+    start + perPage
+  );
+
+  if (!pageMembers.length) {
+    return '❌ ไม่พบสมาชิกรอตรวจสอบ';
+  }
+
+  let msg =
+`📋 สมาชิกรอตรวจสอบ
+หน้า ${page}
+
+`;
+
+  pageMembers.forEach(([uid, m], i) => {
+
+    msg +=
+`${start + i + 1}. ${m.fullname || '-'}
+📱 ${m.phone || '-'}
+📅 ${m.registeredAt || '-'}
+🆔 ${uid}
+
+`;
+  });
+
+  const totalPages =
+    Math.ceil(members.length / perPage);
+
+  msg +=
+`\nทั้งหมด ${members.length} คน
+หน้า ${page}/${totalPages}`;
+
+  return msg;
+}
+
+function getRemainDays(expireAt) {
+  if (!expireAt) return null;
+
+  const expireTime = new Date(expireAt).getTime();
+  if (Number.isNaN(expireTime)) return null;
+
+  return Math.ceil((expireTime - Date.now()) / (24 * 60 * 60 * 1000));
+}
+
+async function notifyMemberExpiryAlerts() {
+  const db = loadDB();
+  let changed = false;
+
+  for (const [userId, member] of Object.entries(db.members || {})) {
+    if (member.status !== 'approved') continue;
+    if (!member.expireAt) continue;
+
+    const remainDays = getRemainDays(member.expireAt);
+    if (remainDays === null) continue;
+
+    try {
+      if (remainDays === 3 && !member.notifyExpire3Day) {
+        await push(userId, {
+          type: 'text',
+          text:
+`⏰ สิทธิ์ใช้งานของท่านจะหมดอายุในอีก 3 วัน
+
+กรุณาติดต่อแอดมินเพื่อต่ออายุสมาชิก
+เพื่อรักษาสิทธิ์ของท่าน 🙏`
+        });
+
+        member.notifyExpire3Day = true;
+        changed = true;
+      }
+
+      if (remainDays === 1 && !member.notifyExpire1Day) {
+        await push(userId, {
+          type: 'text',
+          text:
+`⚠️ สิทธิ์ใช้งานของท่านจะหมดอายุภายใน 24 ชั่วโมง
+
+กรุณาติดต่อแอดมินเพื่อต่ออายุสมาชิก
+เพื่อไม่ให้การใช้งานสะดุด 🙏`
+        });
+
+        member.notifyExpire1Day = true;
+        changed = true;
+      }
+
+      if (remainDays <= 0 && !member.expiredNotified) {
+        await push(userId, {
+          type: 'text',
+          text:
+`📅 วันใช้งานของท่านหมดอายุแล้ว 📅
+
+ติดต่อแอดมินเพื่อทำการต่ออายุใช้งาน
+
+เพื่อรักษาสิทธิ์ของท่าน 🙏`
+        });
+
+        member.expiredNotified = true;
+        changed = true;
+      }
+
+    } catch (e) {
+      console.log('expiry notify error:', userId, e.message);
+    }
+  }
+
+  if (changed) saveDB(db);
 }
 
 function buildMembersPendingText(db) {
@@ -4772,7 +5191,7 @@ function buildWelcomeWarningFlex() {
             action: {
               type: 'uri',
               label: 'ติดต่อ ADMIN',
-              uri: 'https://line.me/ti/p/x71q8bIzZp'
+              uri: 'https://line.me/ti/p/mVmD-ncfvU'
             }
           }
         ]
@@ -4788,14 +5207,6 @@ altText:'ช่องทางสนับสนุนเซิฟเวอร�
 contents:{
 type:'bubble',
 size:'mega',
-
-hero:{
-type:'image',
-url:'https://cdn.phototourl.com/free/2026-05-19-466c8d1d-3b3f-4408-a172-5c63f62d81e6.jpg',
-size:'full',
-aspectRatio:'1:1',
-aspectMode:'cover'
-},
 
 body:{
 type:'box',
@@ -4820,7 +5231,7 @@ color:'#334155'
 
 {
 type:'text',
-text:'สแกน QR ด้านบนเพื่อร่วมสนับสนุน\nค่าเซิร์ฟเวอร์และพัฒนาระบบ',
+text:'🏦 ธนาคาร : กสิกร\n\n💳 เลขบัญชี : 2238457753',
 wrap:true,
 align:'center',
 margin:'lg',
@@ -4880,7 +5291,7 @@ color:'#EAB308',
 action:{
 type:'uri',
 label:'📩 ติดต่อแอดมิน',
-uri:'https://line.me/ti/p/x71q8bIzZp'
+uri:'https://line.me/ti/p/mVmD-ncfvU'
 }
 },
 
@@ -5580,67 +5991,195 @@ if(isNaN(d.getTime())) return dateStr;
 return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()+543}`;
 }
 
-function createSupportFlex() {
+function createCCTVFlex(cameraTime, realTime, diff) {
+return {
+type: 'flex',
+altText: 'ผลการคำนวณเวลา CCTV',
+contents: {
+type: 'bubble',
+body: {
+type: 'box',
+layout: 'vertical',
+spacing: 'md',
+contents: [
+{
+type: 'text',
+text: '🎥 การคำนวณความต่างของเวลา CCTV',
+weight: 'bold',
+size: 'lg',
+wrap: true
+},
+{
+type: 'separator',
+margin: 'md'
+},
+{
+type: 'text',
+text: `⏰ เวลาในกล้อง : ${cameraTime}`,
+wrap: true
+},
+{
+type: 'text',
+text: `⌚ เวลาจริง : ${realTime}`,
+wrap: true
+},
+{
+type: 'text',
+text: '🕒 เวลาต่างกัน',
+weight: 'bold',
+margin: 'md'
+},
+{
+type: 'text',
+text: diff,
+wrap: true,
+weight: 'bold',
+color: '#0066CC',
+size: 'md'
+},
+{
+type: 'separator',
+margin: 'lg'
+},
+{
+type: 'text',
+text: '⚠️ หากเวลาข้ามวัน ให้สลับใช้ เวลาจริง,เวลากล้อง',
+size: 'xs',
+wrap: true,
+color: '#FF6B00',
+margin: 'md'
+}
+]
+}
+}
+};
+}
+
+function packageBubble(days, price, badgeText = '') {
+  const isPopular = badgeText !== '';
+
   return {
-    type: 'flex',
-    altText: 'แพ็คเกจสนับสนุนเซิร์ฟเวอร์',
-    contents: {
-      type: 'bubble',
+    type: 'bubble',
+    size: 'mega',
+    hero: {
+  type: 'box',
+  layout: 'vertical',
+  backgroundColor: '#0B0F14',
+  paddingAll: '20px',
+  contents: [
+    {
+      type: 'text',
+      text: '🏦 ธนาคาร : กสิกร',
+      color: '#FFFFFF',
+      weight: 'bold',
+      size: 'md',
+      align: 'center'
+    },
+    {
+      type: 'text',
+      text: '💳 เลขบัญชี : 2238457753',
+      color: '#FFD700',
+      weight: 'bold',
+      size: 'lg',
+      align: 'center',
+      margin: 'md'
+    }
+  ]
+},
+    body: {
+      type: 'box',
+      layout: 'vertical',
+      backgroundColor: '#0B1F16',
+      paddingAll: '20px',
+      contents: [
+        {
+          type: 'text',
+          text: isPopular ? badgeText : 'PREMIUM SUPPORT',
+          weight: 'bold',
+          size: 'xs',
+          color: isPopular ? '#FFD700' : '#7CFFB2',
+          align: 'center'
+        },
+        {
+          type: 'text',
+          text: 'สนับสนุนเซิร์ฟเวอร์',
+          weight: 'bold',
+          size: 'lg',
+          color: '#FFFFFF',
+          align: 'center',
+          margin: 'md'
+        },
+        {
+          type: 'text',
+          text: days,
+          weight: 'bold',
+          size: '4xl',
+          color: '#06C755',
+          align: 'center',
+          margin: 'lg'
+        },
+        {
+          type: 'box',
+          layout: 'vertical',
+          backgroundColor: '#102E20',
+          cornerRadius: 'lg',
+          paddingAll: '14px',
+          margin: 'md',
+          contents: [
+            {
+              type: 'text',
+              text: price,
+              weight: 'bold',
+              size: 'xxl',
+              color: '#FFD700',
+              align: 'center'
+            }
+          ]
+        },
+        {
+          type: 'separator',
+          margin: 'xl',
+          color: '#2D5A3F'
+        },
+        {
+          type: 'text',
+          text: 'ชื่อผู้สนับสนุนต้องตรงกับผู้สมัครเท่านั้น',
+          size: 'xs',
+          color: '#FFB3B3',
+          wrap: true,
+          align: 'center',
+          margin: 'lg'
+        }
+      ]
+    },
+    footer: {
+      type: 'box',
+      layout: 'vertical',
+      backgroundColor: '#0B1F16',
+      paddingAll: '16px',
+      contents: [
+        {
+          type: 'button',
+          style: 'primary',
+          height: 'md',
+          color: '#06C755',
+          action: {
+  type: 'message',
+  label: 'แจ้งสลิปสนับสนุน',
+  text: 'แจ้งสลิปสนับสนุน'
+}
+        }
+      ]
+    },
+    styles: {
       hero: {
-        type: 'image',
-        url: 'https://senior-aquamarine-wlaqfqzs.edgeone.app/Screenshot%202026-06-02%20123205.png',
-        size: 'full',
-        aspectRatio: '1:1',
-        aspectMode: 'cover'
+        backgroundColor: '#FFFFFF'
       },
       body: {
-        type: 'box',
-        layout: 'vertical',
-        spacing: 'md',
-        contents: [
-          {
-            type: 'text',
-            text: '📂 แพ็คเกจสนับสนุนเซิร์ฟเวอร์',
-            weight: 'bold',
-            size: 'lg'
-          },
-          {
-            type: 'text',
-            text: '💠 30 วัน — 500 บาท',
-            weight: 'bold'
-          },
-          {
-            type: 'separator',
-            margin: 'md'
-          },
-          {
-            type: 'text',
-            text: '📸 สนับสนุนแล้วส่งสลิปยืนยันทางแชทนี้',
-            wrap: true
-          },
-          {
-            type: 'text',
-            text: '⏳ รอการตรวจสอบจากทีมงาน',
-            wrap: true
-          },
-          {
-            type: 'separator',
-            margin: 'md'
-          },
-          {
-            type: 'text',
-            text: '⚠️ ชื่อบัญชีผู้โอนต้องตรงกับชื่อผู้สมัคร',
-            wrap: true,
-            size: 'sm',
-            color: '#FF6B00'
-          },
-          {
-            type: 'text',
-            text: 'เพื่อความปลอดภัยในการใช้งานและยืนยันตัวตน',
-            wrap: true,
-            size: 'sm'
-          }
-        ]
+        backgroundColor: '#0B1F16'
+      },
+      footer: {
+        backgroundColor: '#0B1F16'
       }
     }
   };
@@ -5650,8 +6189,186 @@ async function handleText(event) {
   const userId = event.source.userId;
   const text = (event.message.text || '').trim();
 
+if (
+  text.startsWith('d#') ||
+  text.startsWith('t#') ||
+  text.startsWith('tid#') ||
+  text.startsWith('tn#') ||
+  text.startsWith('f#') ||
+  text.startsWith('tic%') ||
+  text.startsWith('atm%') ||
+  text.startsWith('cell%') ||
+  text.startsWith('pid%') ||
+  text.startsWith('nm%') ||
+  text.startsWith('h%') ||
+  text.startsWith('si%') ||
+  text.startsWith('dc%') ||
+  text.startsWith('dl#') ||
+  text.startsWith('pb%') ||
+  text.startsWith('psi#') ||
+  text.startsWith('ps#') ||
+  text.startsWith('wf%') ||
+  text.startsWith('c#') ||
+  text.startsWith('doc#') ||
+  text.startsWith('cid#') ||
+  text.startsWith('car#') ||
+  text.startsWith('pt%') ||
+  text.startsWith('ff%') ||
+  text.startsWith('peab%') ||
+  text.startsWith('pean%') ||
+  text.startsWith('peau%') ||
+  text.startsWith('peac%') ||
+  text.startsWith('phis%') ||
+  text.startsWith('chphis%') ||
+  text.startsWith('dr%') ||
+  text.startsWith('soc%') ||
+  text.startsWith('ip%') ||
+  text.startsWith('imei%') ||
+  text.startsWith('imsi%') ||
+  text.startsWith('icc%') ||
+  text.startsWith('web%') ||
+  text.startsWith('dis%') ||
+  text.startsWith('map%') ||
+  text.startsWith('lw%') ||
+  text.startsWith('cj%') ||
+  text.startsWith('se%') ||
+  text.startsWith('lc%') ||
+  text.startsWith('loa%') ||
+  text.startsWith('for%') ||
+  text.startsWith('tr%') ||
+  text.startsWith('cctv%') ||
+  text.startsWith('tisi%') ||
+  text.startsWith('s%') ||
+  text.startsWith('bq%')
+) {
+  try {
+    const profile = await getProfile(userId);
+
+    saveSearchLog(
+      userId,
+      profile.displayName,
+      text
+    );
+
+    console.log(
+      'SAVE LOG:',
+      profile.displayName,
+      text
+    );
+  } catch (e) {
+    console.log(
+      'save log error:',
+      e.message
+    );
+  }
+}
+
   const db = loadDB();
   const member = db.members?.[userId];
+
+if (text === 'แจ้งสลิปสนับสนุน') {
+  supportSlipSessions[userId] = {
+    step: 'waiting_slip',
+    createdAt: Date.now()
+  };
+
+  return reply(event.replyToken, {
+    type: 'text',
+    text: '📸 กรุณาส่งภาพสลิปสนับสนุนเข้ามาในแชทนี้ได้เลยครับ'
+  });
+}
+
+if (text.startsWith('ดูlog')) {
+  if (!isAdmin(userId)) {
+    return reply(event.replyToken, {
+      type: 'text',
+      text: '❌ คำสั่งนี้ใช้ได้เฉพาะแอดมิน'
+    });
+  }
+
+  let logs = [];
+
+  try {
+    logs = JSON.parse(fs.readFileSync(SEARCH_LOG_FILE, 'utf8'));
+  } catch {
+    logs = [];
+  }
+
+  const keyword = text.replace(/^ดูlog#?/i, '').trim();
+
+  if (keyword) {
+    logs = logs.filter(log =>
+      String(log.text || '').includes(keyword) ||
+      String(log.lineName || '').includes(keyword) ||
+      String(log.userId || '').includes(keyword)
+    );
+  }
+
+  const rows = logs.slice(0, 20).map((log, i) => {
+    const timeText = log.time
+      ? formatThaiDate(log.time)
+      : '-';
+
+    return `${i + 1}. 👤 ชื่อ LINE ผู้ค้น: ${log.lineName || '-'}
+🆔 UID ผู้ค้น: ${log.userId || '-'}
+🕒 วันที่เวลาค้น: ${timeText}
+🔎 รายการที่ค้น: ${log.text || '-'}`;
+  });
+
+  return reply(event.replyToken, {
+    type: 'text',
+    text: rows.length
+      ? `📜 ประวัติการค้นหา${keyword ? `\nค้นหา: ${keyword}` : ''}\n\n${rows.join('\n\n')}`
+      : 'ไม่พบประวัติการค้นหา'
+  });
+}
+
+if (text === 'ลบlogทั้งหมด') {
+
+  if (!isAdmin(userId)) {
+    return reply(event.replyToken, {
+      type: 'text',
+      text: '❌ คำสั่งนี้ใช้ได้เฉพาะแอดมิน'
+    });
+  }
+
+  try {
+    fs.writeFileSync(
+      SEARCH_LOG_FILE,
+      JSON.stringify([], null, 2),
+      'utf8'
+    );
+
+    return reply(event.replyToken, {
+      type: 'text',
+      text: '✅ ลบ Log ทั้งหมดเรียบร้อยแล้ว'
+    });
+
+  } catch (err) {
+    return reply(event.replyToken, {
+      type: 'text',
+      text: '❌ เกิดข้อผิดพลาดในการลบ Log'
+    });
+  }
+}
+
+if (text.startsWith('ดูสมาชิกทั้งหมด')) {
+  const page = Number(text.split(/\s+/)[1]) || 1;
+
+  return reply(event.replyToken, {
+    type: 'text',
+    text: buildMembersAllText(db, page)
+  });
+}
+
+if (text.startsWith('สมาชิกใกล้หมดอายุ')) {
+  const page = Number(text.split(/\s+/)[1]) || 1;
+
+  return reply(event.replyToken, {
+    type: 'text',
+    text: buildMembersExpiringSoonText(db, page)
+  });
+}
 
 if (/^dis%/i.test(text)) {
   const raw = text.replace(/^dis%/i, '').trim();
@@ -5692,11 +6409,47 @@ if (/^dis%/i.test(text)) {
   text === 'สนับสนุน' ||
   text === '#donate'
 ) {
+  return reply(event.replyToken, {
+    type: 'flex',
+    altText: 'แพ็คเกจสนับสนุนเซิร์ฟเวอร์',
+    contents: {
+      type: 'carousel',
+      contents: [
+  packageBubble('30 วัน', '499 บาท'),
+  packageBubble('90 วัน', '1299 บาท'),
+  packageBubble('180 วัน', '2500 บาท', '🔥 ยอดนิยม'),
+  packageBubble('365 วัน', '4999 บาท', '⭐ คุ้มที่สุด')
+]
+    }
+  });
+}
 
-  return reply(
-    event.replyToken,
-    createSupportFlex()
-  );
+if (text === 'สนับสนุน4999') {
+  return reply(event.replyToken, {
+    type: 'flex',
+    altText: 'แพ็คเกจสนับสนุน 12 เดือน',
+    contents: packageBubble('365 วัน', '4999 บาท', '⭐ คุ้มที่สุด')
+  });
+}
+
+if (
+  text === '#สนับสนุน' ||
+  text === 'สนับสนุน' ||
+  text === '#donate'
+) {
+  return reply(event.replyToken, {
+    type: 'flex',
+    altText: 'แพ็คเกจสนับสนุนเซิร์ฟเวอร์',
+    contents: {
+      type: 'carousel',
+      contents: [
+        packageBubble('30 วัน', '499 บาท'),
+        packageBubble('90 วัน', '1299 บาท'),
+        packageBubble('180 วัน', '2500 บาท', '🔥 ยอดนิยม'),
+        packageBubble('365 วัน', '4999 บาท', '⭐ คุ้มที่สุด')
+      ]
+    }
+  });
 }
 
 if(/^อนุญาติดีแทค#/.test(text)){
@@ -6090,7 +6843,8 @@ if (db.bMode?.[userId]) {
   });
 }
 
-if (text === 'ดูสมาชิกรอตรวจสอบ') {
+if (text.startsWith('ดูสมาชิกรอตรวจสอบ')) {
+
   if (!isAdmin(userId)) {
     return reply(event.replyToken, {
       type: 'text',
@@ -6098,9 +6852,14 @@ if (text === 'ดูสมาชิกรอตรวจสอบ') {
     });
   }
 
-  return reply(event.replyToken, buildPendingMembersFlex(db));
-}
+  const page =
+    Number(text.split(/\s+/)[1]) || 1;
 
+  return reply(event.replyToken, {
+    type: 'text',
+    text: buildPendingMembersText(db, page)
+  });
+}
   const cancelMatch = text.match(/^ยกเลิกสมาชิก#(.+)$/);
 
   if (cancelMatch) {
@@ -6139,15 +6898,14 @@ if (text === 'ดูสมาชิกรอตรวจสอบ') {
   }
 
   if (
-    text.startsWith('fx#') ||
-    text.startsWith('a#')
-  ) {
-
-    return reply(event.replyToken, {
-      type: 'text',
-      text: '⏳System processing'
-    });
-  }
+  text.startsWith('fx#') ||
+  text.startsWith('a#')
+) {
+  return reply(event.replyToken, {
+    type: 'text',
+    text: '🔍คำสั่งปรับปรุงค้นหาใหม่ภายหลัง...\n⏳command updates⏳'
+  });
+}
 
   if (!canUseBotCommands(userId, member, text)) {
     if (!member) {
@@ -6337,133 +7095,7 @@ if (text.startsWith('nm%')) {
 }
 
   if (text === 'menu%') {
-  return reply(event.replyToken, {
-    type: 'text',
-    text: `📂 คู่มือคำสั่งใช้งาน 📂
--  -  -  -  -  -  -  -  -
-╭ 📶 เครือข่าย / โทรศัพท์
-├ 📶 %66xxxxxxxxx→สถานะเบอร์
-├ 📶 ?เบอร์โทร→เครือข่ายเบอร์
-├ 🟢 a#เบอร์โทร/เลขบัตร→REG AIS
-├ 🔵 d#เบอร์โทร/เลขบัตร→REG DTAC
-├ 🔴 t#เบอร์→REG TRUE
-├ 🔴 tid#เลขบัตร→REG TRUE
-╰ 🔴 tn#ชื่อ-นามสกุล→REG TRUE
--  -  -  -  -  -  -  -  -
-╭ 📦 ระบบขนส่ง
-├ 📦 f#เบอร์โทร→พัสดุทั่วไป
-├ 📦 fx#เบอร์โทร/ชื่อสกุล/→พัสดุแบบละเอียด
-╰ 📦 tic%เลขพัสดุ→ภาพรับพัสดุ
--  -  -  -  -  -  -  -  -
-╭ 🏦 ธนาคาร / ATM
-├ 🏦 bn%ชื่อธนาคาร→ค้นหาธนาคาร
-├ 🏦 bc%รหัสสาขา→สาขาธนาคาร
-├ 🏦 bk%เลขบัญชี→บัญชีธนาคาร
-├ 🏦 atm%รหัสตู้→จุดติดตั้ง ATM
-╰ 🏦 cell%LAC,CID→พิกัด Cell
--  -  -  -  -  -  -  -  -
-╭ 🏥 สุขภาพ / การรักษา
-├ 🏥 pid%เลขบัตร→ตรวจสอบสิทธิ
-├ 🏥 h%เลขบัตร→ตรวจสอบข้อมูลการรักษา
-╰ 🏥 nm%รหัสหน่วยบริการ/ชื่อสถานพยาบาล→ค้นหาสถานพยาบาล
--  -  -  -  -  -  -  -  -
-╭ 🎓 การศึกษา
-├ 🎓 st%เลขบัตรบุตร→ตรวจสอบข้อมูลการศึกษา
-╰ ⚠️ ใช้เลขบัตรของบุตรเท่านั้น
--  -  -  -  -  -  -  -  -
-╭ 🔎 ตรวจสอบบุคคล
-├ 🔎 si%เลขบัตร→ตรวจสอบประกันสังคม
-├ 🔎 dc%ชื่อ สกุล→ตรวจสอบแพทย์
-├ 🔎 dl#เลขบัตร→ตรวจสอบใบขับขี่
-├ 🔎 pb%เลขบัตร→ตรวจสอบคุมประพฤติ
-├ 🔎 psi#เลขบัตร→ตรวจสอบผู้ต้องขัง
-╰ 🔎 ps#เลขบัตร→ตรวจสอบผู้ต้องขังยังไม่พิพากษา
-├ 🔎 wf%เลขบัตร→เบี้ยยังชีพ
--  -  -  -  -  -  -  -  -
-╭ 🚔 หมายจับ
-├ ⚖️ c#เลขบัตร→หมายจับ CRIME
-╰ ⚖️ doc#เลขบัตร→หมายจับศาล
--  -  -  -  -  -  -  -  -
-╭ 🚗 ครอบครองรถ / ทะเบียน
-├ 🚗 cid#เลขบัตร→ตรวจจากเลขบัตร
-├ 🚗 car#จังหวัด หมวด ตัวเลข ประเภทรถ→ตรวจจากทะเบียน
-├ 📌 ตัวอย่าง:
-│ 🚘 car#กรุงเทพ 1กก 334 1
-├ 🚗 pt%→อ่านป้ายทะเบียนและวิเคราะห์รถ
-╰ 📸 รอระบบแจ้งให้ส่งภาพใบหน้า
-
-╭ 🧑‍💻 ระบบ AI / เปรียบเทียบ
-├ 🧑‍💻 ff%→เปรียบเทียบใบหน้า
-╰ 📸 รอระบบแจ้งให้ส่งภาพใบหน้า
--  -  -  -  -  -  -  -  -
-╭ ⚡ ไฟฟ้า / ยูทิลิตี้
-├ ⚡ mea%ชื่อสกุล→Mea ชื่อสกุล
-├ ⚡ kru%เลขมิเตอร์→Mea มิเตอร์ไฟฟ้า
-├ ⚡ peab%เลขCA เว้นวรรค เลขมิเตอร์→ตรวจสอบประวัติใช้ไฟ
-│ (peab%02000xxxx 63xxxxx)
-├ ⚡ peac%เลข CA→ไฟฟ้าจาก CA
-├ ⚡ pean%ชื่อสกุล→ไฟฟ้าจากชื่อสกุล
-├ ⚡ peau%ที่อยู่→ไฟฟ้าจากที่อยู่ เช่น
-│ 19 ม.1 ต.ทดสอบ อ.ทดสอบ
-╰ (ไม่ต้องใส่ถึง จ.)
--  -  -  -  -  -  -  -  -
-╭ 🌐 เครื่องมือ / ข้อมูลอื่นๆ
-├ 🎣 phis%URL→เพิ่ม Phishing
-├ 🎣 chphis%ID→ตรวจ Phishing
-├ 🌐 picf%url→ตรวจ ดึงภาพ Profile facebook
-├ 🔎 dr%ชื่อ สกุล→ข้อมูลแพทย์/บุคลากรสาธารณสุข
-├ 🌐 soc%Username/ชื่อโซเชี่ยล/หรือข้อความอื่นๆ→ค้นหาโซเชี่ยล
-├ 🌐 ip%เลข IP→ตรวจเครือข่าย IP
-├ 🌐 imei%เลข IMEI→ตรวจ IMEI
-├ 🌐 imsi%เลข IMSI→ตรวจ IMSI
-├ 🌐 icc%เลข ICCID→ตรวจเลขซิมการ์ด
-├ 🌐 web%ชื่อเว็บไซต์→ตรวจเว็บไซต์
-├ 🌐 dis%ละติจูด ลองจิจูดต้นทาง/ละติจูด ลองติจูดปลายทาง→ระยะทางเชิงเส้นตรง 
-⚠️ตัวอย่าง⚠️
-dis%16.xxxxxx,108.xxxxxx/16.xxxx3,108.xxxxx
-├ 🌐 map%ละติจูด,ลองจิจูด→พิกัด MAP
-╰ 🌐 lw%คำถาม→ค้นหาข้อกฎหมาย
--  -  -  -  -  -  -  -  -
-╭ 🏪 ร้านค้า / สวัสดิการ
-├ 🏪 cj%เบอร์ เลขบัตร→สมาชิก CJ
-├ 🏪 se%รหัสสาขา7-11→สาขาเซเว่น
-├ 🏢 lc%ชื่อ-สกุล,ชื่อบริษัท→ใบอนุญาตบริษัท
-├ 📱 loa%ชื่อแอป→ตรวจสอบแอปเงินกู้
-├ 📑 for%เลขนิติ→ทะเบียนพาณิชย์/นิติบุคคล
-├ 🚚 tr%ชื่อผู้ประกอบการ→ผู้ประกอบการขนส่ง
-├ 📹 cctv%เวลากล้อง,เวลาจริง→เปรียบเทียบเวลากล้อง
-├ 🏅 tisi%เลขมอก.→ตรวจมาตรฐาน มอก
-├ 🛒 s%เลขบัตร→ผ่อนเครื่องใช้ไฟฟ้า
-╰ 🚙 bq%เบอร์โทร/เลขบัตร→ศูนย์บริการรถ
--  -  -  -  -  -  -  -  -
-╭ 🚘 ประเภทรถ
-├ 1️⃣ รถยนต์นั่งไม่เกิน 7 คน
-├ 2️⃣ รถยนต์นั่งเกิน 7 คน
-├ 3️⃣ รถบรรทุกส่วนบุคคล
-├ 4️⃣ สามล้อส่วนบุคคล
-├ 5️⃣ รับจ้างระหว่างจังหวัด
-├ 6️⃣ รับจ้างไม่เกิน 7 คน
-├ 7️⃣ สี่ล้อเล็กรับจ้าง
-├ 8️⃣ รับจ้างสามล้อ
-├ 9️⃣ บริการธุรกิจ
-├ 🔟 บริการทัศนาจร
-├ 1️⃣1️⃣ บริการให้เช่า
-├ 1️⃣2️⃣ จักรยานยนต์
-├ 1️⃣3️⃣ รถแทรกเตอร์
-├ 1️⃣4️⃣ รถบดถนน
-├ 1️⃣5️⃣ รถใช้ในงานเกษตรกรรม
-├ 1️⃣6️⃣ รถพ่วง
-├ 1️⃣7️⃣ จักรยานยนต์สาธารณะ
-├ 3️⃣0️⃣ รถโดยสารประจำทาง
-├ 3️⃣1️⃣ รถขนาดเล็ก
-├ 3️⃣2️⃣ โดยสารไม่ประจำทาง
-├ 3️⃣3️⃣ โดยสารส่วนบุคคล
-├ 3️⃣4️⃣ บรรทุกไม่ประจำทาง
-╰ 3️⃣5️⃣ บรรทุกส่วนบุคคล
--  -  -  -  -  -  -  -  -
-╭ ⚠️ คำสั่งที่มีการปรับปรุง
-╰ ⚠️ a# / fx#`
-  });
+  return reply(event.replyToken, buildMenuCarouselFlex());
 }
 
 if (text.startsWith('picf%')) {
@@ -6971,7 +7603,7 @@ text:`⛔สิทธิ์สืบค้นคำสั่ง DTAC ถูก�
 
 📂ต้องการใช้งานติดต่อ admin📂
 Contact Admin:
-https://line.me/ti/p/x71q8bIzZp
+https://line.me/ti/p/mVmD-ncfvU
 ------------`
 });
 }
@@ -7178,7 +7810,7 @@ text:`⛔สิทธิ์สืบค้นคำสั่งประกั�
 
 📂ต้องการใช้งานติดต่อ admin📂
 Contact Admin:
-https://line.me/ti/p/x71q8bIzZp
+https://line.me/ti/p/mVmD-ncfvU
 ------------`
 });
 }
@@ -7617,12 +8249,25 @@ text: newText
   }
 
   if (text.startsWith('cctv%')) {
-    const times = text.replace(/^cctv%/i, '').split(',').map(item => item.trim()).filter(Boolean);
-    if (times.length !== 2) {
-      return reply(event.replyToken, { type: 'text', text: '❌ กรุณาระบุเวลา เช่น cctv%12:00:00, 12:05:30' });
-    }
-    return reply(event.replyToken, { type: 'text', text: calculateCCTVTimeDiff(times[0], times[1]) });
+  const times = text.replace(/^cctv%/i, '')
+    .split(',')
+    .map(item => item.trim())
+    .filter(Boolean);
+
+  if (times.length !== 2) {
+    return reply(event.replyToken, {
+      type: 'text',
+      text: '❌ กรุณาระบุเวลา เช่น cctv%12:00:00, 12:05:30'
+    });
   }
+
+  const diff = calculateCCTVTimeDiff(times[0], times[1]);
+
+  return reply(
+    event.replyToken,
+    createCCTVFlex(times[0], times[1], diff)
+  );
+}
 
   if (text.startsWith('tisi%')) {
     const licenseId = text.replace(/^tisi%/i, '').trim();
@@ -7639,7 +8284,7 @@ text: newText
       return reply(event.replyToken, { type: 'text', text: '❌กรุณาระบุเลขบัตรประชาชน เช่น psi#1234567890123' });
     }
     try {
-      const data = await fetchPEAApi({ psi: input });
+      const data = await fetchPrisonerApi({ psi: input });
       const result = formatPrisonerRecords(data, input, false);
       return reply(event.replyToken, { type: 'text', text: result });
     } catch (err) {
@@ -7654,7 +8299,7 @@ text: newText
       return reply(event.replyToken, { type: 'text', text: '❌กรุณาระบุเลขบัตรประชาชน เช่น ps#1234567890123' });
     }
     try {
-      const data = await fetchPEAApi({ ps: input });
+      const data = await fetchPrisonerApi({ ps: input });
       const result = formatPrisonerRecords(data, input, true);
       return reply(event.replyToken, { type: 'text', text: result });
     } catch (err) {
@@ -8132,6 +8777,56 @@ async function handleImage(event) {
   const member = db.members[userId];
   const topup = db.topups?.[userId];
   
+  if (supportSlipSessions[userId]?.step === 'waiting_slip') {
+  try {
+    const profile = await getProfile(userId);
+
+    const fileName = `support_${userId}_${Date.now()}.jpg`;
+    const savePath = path.join(UPLOAD_DIR, fileName);
+
+    await downloadLineImage(
+      event.message.id,
+      savePath
+    );
+
+    delete supportSlipSessions[userId];
+
+    for (const adminId of ADMIN_IDS) {
+      await push(adminId, [
+        {
+          type: 'text',
+          text:
+`📩 มีสมาชิกส่งสลิปสนับสนุน
+
+👤 ชื่อ LINE:
+${profile.displayName || '-'}
+
+🆔 UID:
+${userId}`
+        },
+        {
+          type: 'image',
+          originalContentUrl: `${BASE_URL}/uploads/${fileName}`,
+          previewImageUrl: `${BASE_URL}/uploads/${fileName}`
+        }
+      ]);
+    }
+
+    return reply(event.replyToken, {
+      type: 'text',
+      text: '✅ ได้รับสลิปสนับสนุนแล้วครับ\nขอบคุณสำหรับการสนับสนุนครับ 🙏'
+    });
+
+  } catch (err) {
+    console.log('support slip upload error:', err.message);
+
+    return reply(event.replyToken, {
+      type: 'text',
+      text: '❌ บันทึกสลิปสนับสนุนไม่สำเร็จ กรุณาลองใหม่อีกครั้ง'
+    });
+  }
+}
+  
 if (
 topup &&
 topup.status === 'waiting_slip'
@@ -8512,12 +9207,14 @@ return reply(event.replyToken, {
 
 }
 
-  if (data === 'admin_members_all') {
-    return reply(event.replyToken, {
-      type: 'text',
-      text: buildMembersAllText(db)
-    });
-  }
+  if (data.startsWith('admin_members_all')) {
+  const page = Number(data.split('_').pop()) || 1;
+
+  return reply(event.replyToken, {
+    type: 'text',
+    text: buildMembersAllText(db, page)
+  });
+}
 
  if (data === 'admin_members_pending') {
 
